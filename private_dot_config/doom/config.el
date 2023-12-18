@@ -127,3 +127,22 @@
                      "remote-shell-login" "-l"))
   ;(customize-set-variable 'tramp-encoding-shell "/bin/sh") ;; /bin/sh is default..
   )
+
+
+;; PYTHON
+(use-package! pyvenv
+  :config
+  ;(pyvenv-mode t)
+
+  ;; Set correct Python interpreter
+  (setq pyvenv-post-activate-hooks
+        (list (lambda ()
+                (setq python-shell-interpreter (concat (replace-regexp-in-string ".*:" "" pyvenv-virtual-env) "bin/python")))
+              (lambda ()
+                (let ((ipython-path (concat (replace-regexp-in-string ".*:" "" pyvenv-virtual-env) "bin/ipython")))
+                  (setq +python-ipython-command (list ipython-path "-i" "--simple-prompt" "--no-color-info"))))))
+  (setq pyvenv-post-deactivate-hooks
+        (list (lambda ()
+                (setq python-shell-interpreter "python"))
+              (lambda ()
+                (setq +python-ipython-command '("ipython" "-i" "--simple-prompt" "--no-color-info"))))))
