@@ -6,8 +6,8 @@
 
 ;; Some functionality uses this to identify you, e.g. GPG configuration, email
 ;; clients, file templates and snippets. It is optional.
-;; (setq user-full-name "John Doe"
-;;       user-mail-address "john@doe.com")
+(setq user-full-name "Brendan Murphy"
+      user-mail-address "hello@brendanmurphy.org")
 
 ;; Doom exposes five (optional) variables for controlling fonts in Doom:
 ;;
@@ -43,6 +43,9 @@
 (setq org-directory "~/org/")
 
 
+;; BASIC CONFIG
+(setq doom-font-increment 1)
+
 ;; Whenever you reconfigure a package, make sure to wrap your config in an
 ;; `after!' block, otherwise Doom's defaults may override your settings. E.g.
 ;;
@@ -74,17 +77,6 @@
 ;;
 ;; You can also try 'gd' (or 'C-c c d') to jump to their definition and see how
 ;; they are implemented.
-(use-package! python-black
-  :demand t
-  :after python
-  :config
-  ;; (add-hook! 'python-mode-hook #'python-black-on-save-mode)
-  (setq python-black-extra-args '("-l 110"))
-  ;; Feel free to throw your own personal keybindings here
-  ;;(map! :leader :desc "Blacken Buffer" "m b b" #'python-black-buffer)
-  ;;(map! :leader :desc "Blacken Region" "m b r" #'python-black-region)
-  ;;(map! :leader :desc "Blacken Statement" "m b s" #'python-black-statement)
-)
 
 ;; TRAMP
 ;; (setq tramp-default-method "ssh")
@@ -148,6 +140,19 @@
               (lambda ()
                 (setq +python-ipython-command '("ipython" "-i" "--simple-prompt" "--no-color-info"))))))
 
+(use-package! python-black
+  :demand t
+  :after python
+  :config
+  ;; (add-hook! 'python-mode-hook #'python-black-on-save-mode)
+  (setq python-black-extra-args '("-l 110"))
+  ;; Feel free to throw your own personal keybindings here
+  ;;(map! :leader :desc "Blacken Buffer" "m b b" #'python-black-buffer)
+  ;;(map! :leader :desc "Blacken Region" "m b r" #'python-black-region)
+  ;;(map! :leader :desc "Blacken Statement" "m b s" #'python-black-statement)
+)
+
+
 ;; JUPYTER
 (map! :after org
       "C-c i j" #'jupyter-org-insert-src-block)
@@ -160,11 +165,14 @@
 
 ;; MAGIT
 
+
+;; SMERGE
 (defun smerge-repeatedly ()
   "Perform smerge actions again and again"
   (interactive)
   (smerge-mode 1)
   (smerge-transient))
+
 (after! transient
   (transient-define-prefix smerge-transient ()
     [["Move"
@@ -186,6 +194,7 @@
       ("c" "combine" (lambda () (interactive) (ignore-errors (smerge-combine-with-next)) (smerge-repeatedly)))
       ("r" "resolve" (lambda () (interactive) (ignore-errors (smerge-resolve)) (smerge-repeatedly)))
       ("k" "kill current" (lambda () (interactive) (ignore-errors (smerge-kill-current)) (smerge-repeatedly)))
-      ("q" "quit" (lambda () (interactive
+      ("q" "quit" (lambda () (interactive) (smerge-auto-leave)))]]))
 
-) (smerge-auto-leave)))]]))
+
+(add-hook! magit-diff-visit-file-hook (smerge-repeatedly))
