@@ -49,4 +49,34 @@
 ;; ...Or *all* packages (NOT RECOMMENDED; will likely break things)
 ;(unpin! t)
 (package! python-black)
+
+
+(package! exec-path-from-shell)
+
+(package! micromamba)
+
+;(package! org-reveal)
+;(package! ox-reveal)
+
+(package! mermaid-mode)
+(package! ob-mermaid)
+
+;; magit/orgit
+(package! orgit)
+(package! orgit-forge)
+
+;; jupyter
 ;;(package! jupyter :pin "053a78da252b19cf59cefe6b83f9c4531a38d6b2")
+
+;; emacs-zmq (dependency for emacs-jupyter)
+(package! emacs-zmq
+  :recipe (:host github
+           :repo "nnicandro/emacs-zmq"))
+;;  :pin "af5299d80715b1083a18145e9c84ef9563020676")
+
+
+(package! googledocstrings
+  :recipe (:host github :repo "brendan-m-murphy/googledocstrings.el"))
+
+;; (package! pymacs
+;;   :recipe (:local-repo "/Users/bm13805/pymacs.el"))

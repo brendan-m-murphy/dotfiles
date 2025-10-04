@@ -1,0 +1,25 @@
+# -*- mode: snippet -*-
+# name: slurm-template
+# key: slurm
+# --
+#!/bin/bash
+#SBATCH --job-name=$1
+#SBATCH --output=/user/work/bm13805/$2/%x_%a.out
+#SBATCH --error=/user/work/bm13805/$2/%x_%a.err
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=4
+#SBATCH --time=02:00:00
+#SBATCH --mem=20gb
+#SBATCH --account=chem007981
+
+# Set up Python environment
+module purge
+module load lang/python/anaconda
+module load tools/git
+source /user/work/bm13805/.jax_venv/bin/activate
+
+# Output path
+OUTPATH=$2
+
+$0

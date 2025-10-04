@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: ssh jupyter
+# key: sshjupyter
+# --
+#+property: header-args:jupyter-python :kernel python3 :session /ssh:bp1:/run/user/home/bm13805/.local/share/jupyter/runtime/$1  :async yes
+$0

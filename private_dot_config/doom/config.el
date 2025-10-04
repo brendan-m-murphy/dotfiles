@@ -40,8 +40,24 @@
 
 ;; If you use `org' and don't want your org files in the default location below,
 ;; change `org-directory'. It must be set before org loads!
-(setq org-directory "~/org/")
+(setq org-directory "~/Documents/org/")
+(setq org-agenda-files (list (concat org-directory "todo.org")
+                             (concat org-directory "renovation.org")
+                             (concat org-directory "home.org")
+                             (concat org-directory "work/")
+                             (concat org-directory "projects/")))
 
+(map! :after org
+      "C-c C-w" #'org-refile)
+
+(setq org-refile-targets
+      `((nil . (:maxlevel . 6))
+        (org-agenda-files . (:maxlevel . 3))
+        (,(directory-files (concat org-directory "work/") 'full (rx ".org" eos)) . (:maxlevel . 3))
+        ))
+(setq org-refile-use-outline-path 'file)
+(setq org-outline-path-complete-in-steps nil)
+(setq org-refile-allow-creating-parent-nodes 'confirm)
 
 ;; BASIC CONFIG
 (setq doom-font-increment 1)
@@ -77,6 +93,17 @@
 ;;
 ;; You can also try 'gd' (or 'C-c c d') to jump to their definition and see how
 ;; they are implemented.
+
+;; mac OSX use right alt as meta
+(setq mac-right-option-modifier 'meta)
+
+
+;; exec-path-from-shell
+;; https://github.com/purcell/exec-path-from-shell
+;; TODO: this isn't working??
+(use-package! exec-path-from-shell)
+(when (memq window-system '(mac ns x))
+  (exec-path-from-shell-initialize))
 
 ;; TRAMP
 ;; (setq tramp-default-method "ssh")
@@ -153,7 +180,27 @@
 )
 
 
+;;; micromamba
+(use-package! micromamba
+  :after python)
+
+;;; ropemacs
+;;(setq ropemacs-enable-shortcuts nil)
+;;(setq repemacs-local-prefix "C-c C-a")
+;;(use-package! pymacs
+;;  :load-path "lisp/pymacs.el")
+;;(defun load-ropemacs ()
+;;  "Load pymacs and ropemacs"
+;;  (interactive)
+;;  (require 'pymacs)
+;;  (pymacs-load "ropemacs" "rope-")
+;;  ;; Automatically save project python buffers before refactorings
+;;  (setq ropemacs-confirm-saving 'nil)
+;;)
+
 ;; JUPYTER
+(use-package! zmq)
+
 (map! :after org
       "C-c i j" #'jupyter-org-insert-src-block)
 
@@ -162,9 +209,10 @@
 
 (add-hook 'org-babel-after-execute-hook #'display-ansi-colors)
 
+(with-eval-after-load 'ob-jupyter
+ (org-babel-jupyter-aliases-from-kernelspecs))
 
 ;; MAGIT
-
 
 ;; SMERGE
 (defun smerge-repeatedly ()
@@ -198,3 +246,65 @@
 
 
 (add-hook! magit-diff-visit-file-hook (smerge-repeatedly))
+
+
+;; C/C++
+(after! lsp-clangd
+  (setq lsp-clients-clangd-args
+        '("-j=3"
+          ;;"--include-directory=/Users/bm13805/.pyenv/versions/3.10.14/include/python3.10/"
+          ;;"--enable-config"
+          "--background-index"
+          "--clang-tidy"
+          "--completion-style=detailed"
+          "--header-insertion=never"
+          "--header-insertion-decorators=0"))
+  (setq lsp-clients-clangd-library-directories
+        '("/usr"
+          "/Users/bm13805/.pyenv/versions/3.10.14/include/python3.10/"
+          "/Users/bm13805/Documents/pytensor_fork/.venv/include"))
+  (set-lsp-priority! 'clangd 2))
+
+
+;; org mode
+;; (after! org
+;;   ;; org-reveal
+;;   (load-library "ox-reveal")
+;;   (setq org-reveal-root "file:///Users/bm13805/bin/reveal.js")
+;;   )
+
+
+;; fix for macOS "file limit" error
+(defun file-notify-rm-all-watches ()
+  "Remove all existing file notification watches from Emacs."
+  (interactive)
+  (maphash
+   (lambda (key _value)
+     (file-notify-rm-watch key))
+   file-notify-descriptors))
+
+;; lsp issues
+(with-eval-after-load 'lsp-mode
+  (add-to-list 'lsp-file-watch-ignored-directories "[/\\\\]\\.site-packages\\'")
+  )
+
+;; mermaid
+(use-package! mermaid-mode)
+(setq ob-mermaid-cli-path "/opt/homebrew/bin/mmdc")
+
+
+;; magit forge
+(setq auth-sources '("~/.authinfo.gpg"))
+
+
+;; orgit/orgit-forge
+(use-package! orgit)
+(use-package! orgit-forge)
+
+
+;; google docstrings for python
+(use-package! googledocstrings
+  :config
+  (setq googledocstrings-insert-examples-block nil)
+  (setq googledocstrings-insert-parameter-types nil)
+  )
