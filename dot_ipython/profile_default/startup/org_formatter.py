@@ -8,6 +8,10 @@ class OrgFormatter(IPython.core.formatters.BaseFormatter):
         if isinstance(obj, (str, bytes)):
             return None
 
+        # don't convert non-array types
+        if all(t not in str(type(obj)).lower() for t in ("dataframe", "series", "ndarray")):
+            return None
+
         try:
             return tabulate(obj, headers='keys', tablefmt='orgtbl', showindex='always')
         except:
