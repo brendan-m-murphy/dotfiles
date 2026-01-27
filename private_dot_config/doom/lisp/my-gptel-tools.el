@@ -12,6 +12,9 @@
 Each entry should be a directory. Paths are canonicalized via `file-truename`."
   :type '(repeat directory))
 
+(defvar my/gptel-session-roots nil
+  "Ephemeral allowed roots for gptel tools (current Emacs session only).")
+
 (defcustom my/gptel-max-lines 250
   "Hard cap on lines returned by any tool."
   :type 'integer)
@@ -38,27 +41,33 @@ Each entry should be a directory. Paths are canonicalized via `file-truename`."
       (ignore-errors (project-root p))))
    (t nil)))
 
+(defun my/gptel--tru-dir (p)
+  "Canonicalize P as a directory truename with trailing slash."
+  (file-name-as-directory (file-truename (expand-file-name p))))
+
 (defun my/gptel--allowed-roots ()
-  "Compute effective allowed roots: project root (if any) + extra roots."
-  (let ((roots (copy-sequence my/gptel-extra-roots)))
+  "Compute effective allowed roots: project root + extra roots + session roots.
+All roots are canonicalized via `file-truename` and normalized with trailing slash."
+  (let ((roots nil))
     (when-let ((pr (my/gptel--project-root)))
-      (push pr roots))
-    ;; Canonicalize, ensure directories, dedupe
-    (setq roots (delq nil (mapcar (lambda (d)
-                                    (when (and d (file-directory-p d))
-                                      (file-name-as-directory (file-truename d))))
-                                  roots)))
-    (cl-delete-duplicates roots :test #'string-equal)))
+      (push (my/gptel--tru-dir pr) roots))
+    (dolist (r my/gptel-extra-roots)
+      (when r (push (my/gptel--tru-dir r) roots)))
+    (dolist (r my/gptel-session-roots)
+      (when r (push (my/gptel--tru-dir r) roots)))
+    (cl-delete-duplicates (delq nil roots) :test #'string-equal)))
 
 (defun my/gptel--allowed-path-p (path)
-  (let* ((tru (file-truename path))
+  "Return non-nil if PATH is under one of the allowed roots."
+  (let* ((tru (file-truename (expand-file-name path)))
          (roots (my/gptel--allowed-roots)))
     (cl-some (lambda (r) (string-prefix-p r tru)) roots)))
 
 (defun my/gptel--assert-allowed (path)
+  "Signal a `user-error` if PATH is outside allowed roots."
   (unless (my/gptel--allowed-path-p path)
     (user-error "Path not allowed: %s (allowed roots: %s)"
-                path
+                (file-truename (expand-file-name path))
                 (string-join (my/gptel--allowed-roots) ", ")))
   path)
 
@@ -93,12 +102,31 @@ Each entry should be a directory. Paths are canonicalized via `file-truename`."
 ;;; Interactive convenience (for you, not for the model)
 
 (defun my/gptel-add-extra-root (dir)
-  "Add DIR to `my/gptel-extra-roots` (interactive convenience)."
+  "Add DIR to `my/gptel-extra-roots` (interactive convenience, persistent via Customize)."
   (interactive "DAdd extra root directory: ")
-  (setq dir (file-name-as-directory (file-truename dir)))
+  (setq dir (my/gptel--tru-dir dir))
   (add-to-list 'my/gptel-extra-roots dir)
   (customize-save-variable 'my/gptel-extra-roots my/gptel-extra-roots)
-  (message "Added extra root: %s" dir))
+  (message "Added extra root (persistent): %s" dir))
+
+(defun my/gptel-add-session-root (dir)
+  "Add DIR to `my/gptel-session-roots` (session-only; frictionless for one-offs)."
+  (interactive "DAllow root for this session: ")
+  (setq dir (my/gptel--tru-dir dir))
+  (add-to-list 'my/gptel-session-roots dir)
+  (message "Added session root: %s" dir))
+
+(defun my/gptel-clear-session-roots ()
+  "Clear all session roots."
+  (interactive)
+  (setq my/gptel-session-roots nil)
+  (message "Cleared all session roots"))
+
+(defun my/gptel-show-roots ()
+  "Show current allowed roots (project + extra + session) in the minibuffer."
+  (interactive)
+  (message "Allowed roots: %s"
+           (string-join (my/gptel--allowed-roots) ", ")))
 
 ;;; Tool implementations
 
@@ -206,9 +234,7 @@ Call this from an (after! gptel ...) block."
      :function #'my/gptel-tool_tail
      :description "Read last n lines of path, capped (from first max-bytes chunk)."
      :args '((:name "path" :type "string")
-             (:name "n"    :type "number" :optional t)))
-    )
-  )
+             (:name "n"    :type "number" :optional t)))))
 
 (provide 'my-gptel-tools)
 ;;; my-gptel-tools.el ends here
