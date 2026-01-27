@@ -42,10 +42,17 @@
 ;; change `org-directory'. It must be set before org loads!
 (setq org-directory "~/Documents/org/")
 (setq org-agenda-files (list (concat org-directory "todo.org")
+                             (concat org-directory "work/todo.org")
+                             (concat org-directory "meeting_notes.org")
+                             (concat org-directory "important_dates.org")
                              (concat org-directory "renovation.org")
                              (concat org-directory "home.org")
                              (concat org-directory "work/")
-                             (concat org-directory "projects/")))
+                             (concat org-directory "projects/")
+                             ))
+
+;; remove archive
+(setq org-agenda-files (remove (concat org-directory "archive/") org-agenda-files))
 
 (map! :after org
       "C-c C-w" #'org-refile)
@@ -58,6 +65,22 @@
 (setq org-refile-use-outline-path 'file)
 (setq org-outline-path-complete-in-steps nil)
 (setq org-refile-allow-creating-parent-nodes 'confirm)
+
+;; todo states
+(setq org-todo-keywords
+      '((sequence "TODO(t)" "PROJ(p)" "WAIT(w)" "HOLD(h)" "IDEA(i)" "SOMEDAY(s)" "|" "DONE(d)" "CANCELLED(c)" )
+        (sequence "[ ](T)" "[-](S)" "[?](W)" "|" "[X](D)")))
+
+;; previous value:
+;; ((sequence "TODO(t)" "PROJ(p)" "LOOP(r)" "STRT(s)" "WAIT(w)" "HOLD(h)" "IDEA(i)" "|" "DONE(d)" "KILL(k)")
+;;  (sequence "[ ](T)" "[-](S)" "[?](W)" "|" "[X](D)")
+;;  (sequence "|" "OKAY(o)" "YES(y)" "NO(n)"))
+
+
+;; org github links
+(use-package! org-gh
+  :after org)
+
 
 ;; BASIC CONFIG
 (setq doom-font-increment 1)
@@ -113,15 +136,15 @@
   "Open dired buffer for directory. "
   (interactive "sBlue Pebble directory: ")
   (let ((path
-        (cond ((string= x "home") "/user/home/bm13805/")
-              ((string= x "work") "/user/work/bm13805/")
-              ((string= x "acrg") "/group/chemistry/acrg/")
-              )
-        ))
+         (cond ((string= x "home") "/user/home/bm13805/")
+               ((string= x "work") "/user/work/bm13805/")
+               ((string= x "acrg") "/group/chemistry/acrg/")
+               )
+         ))
     (find-file (format "/sshx:bm13805@bp1:%s" path))
     (rename-buffer (format "Blue Pebble %s" x))
+    )
   )
-)
 
 (defun disable-company-on-remote-buffers ()
   "Disable company in current buffer, if it is remote."
@@ -137,7 +160,7 @@
   (setq tramp-debug-buffer t) ;; not sure this works?
   (setq tramp-verbose 1) ;; increase for more info
   (dolist (path '("/sw/tools/git-2.35.1/bin" "/system/slurm/23.02.4/bin" "/user/home/bm13805/bin"))
-          (add-to-list 'tramp-remote-path path))
+    (add-to-list 'tramp-remote-path path))
 
   (add-to-list 'tramp-connection-properties
                (list (regexp-quote "/sshx:bm13805@bp1:")
@@ -145,14 +168,14 @@
   (add-to-list 'tramp-connection-properties
                (list (regexp-quote "/sshx:bm13805@bp1:")
                      "remote-shell-login" "-l"))
-  ;(customize-set-variable 'tramp-encoding-shell "/bin/sh") ;; /bin/sh is default..
+                                        ;(customize-set-variable 'tramp-encoding-shell "/bin/sh") ;; /bin/sh is default..
   )
 
 
 ;; PYTHON
 (use-package! pyvenv
   :config
-  ;(pyvenv-mode t)
+                                        ;(pyvenv-mode t)
 
   ;; Set correct Python interpreter
   (setq pyvenv-post-activate-hooks
@@ -177,7 +200,7 @@
   ;;(map! :leader :desc "Blacken Buffer" "m b b" #'python-black-buffer)
   ;;(map! :leader :desc "Blacken Region" "m b r" #'python-black-region)
   ;;(map! :leader :desc "Blacken Statement" "m b s" #'python-black-statement)
-)
+  )
 
 
 ;;; micromamba
@@ -210,7 +233,19 @@
 (add-hook 'org-babel-after-execute-hook #'display-ansi-colors)
 
 (with-eval-after-load 'ob-jupyter
- (org-babel-jupyter-aliases-from-kernelspecs))
+  (org-babel-jupyter-aliases-from-kernelspecs))
+
+;;; fix for warning after M-x, then typing "org" from a org-mode buffer
+(defun my-jupyter-org--define-key-filter (orig &rest args)
+  (if (derived-mode-p 'org-mode)
+      (apply orig args)
+    ;; If we're not in org-mode (e.g. *temp* during doc/annotation),
+    ;; just return nil or the unfiltered bindings, depending on what the
+    ;; filter is expected to do.
+    nil))
+
+(after! jupyter
+  (advice-add 'jupyter-org--define-key-filter :around #'my-jupyter-org--define-key-filter))
 
 ;; MAGIT
 
@@ -308,3 +343,126 @@
   (setq googledocstrings-insert-examples-block nil)
   (setq googledocstrings-insert-parameter-types nil)
   )
+
+
+;; code cell minor mode for jupytext (or ipynb)
+(use-package! code-cells
+  :after python)
+
+
+;; gptel
+(defvar my/openai-api-key--cache nil)
+
+(defun my/openai-api-key ()
+  "Fetch OpenAI API key from macOS Keychain (cached)."
+  (or my/openai-api-key--cache
+      (setq my/openai-api-key--cache
+            (string-trim
+             (shell-command-to-string
+              (format "security find-generic-password -a %s -s openai-api-key -w"
+                      (shell-quote-argument user-login-name)))))))
+
+;; custom OpenAI backend object with more recent model list (as of 26 Jan 2026)
+(after! gptel
+  ;; Define an explicit OpenAI API backend whose model allowlist includes gpt-5.2.
+  ;; This avoids mutating internal backend structs (which may not have setf accessors).
+  (setq gptel-backend
+        (gptel-make-openai "OpenAI API"
+          :key #'my/openai-api-key
+          :models '(gpt-5.2
+                    gpt-5.1 gpt-5 gpt-5-mini gpt-5-nano
+                    gpt-4.1 gpt-4.1-mini gpt-4.1-nano
+                    gpt-4o gpt-4o-mini
+                    o1 o1-mini o3 o3-mini o4-mini
+                    gpt-4-turbo gpt-4 gpt-3.5-turbo)))
+
+  (setq gptel-model 'gpt-5.2))
+
+(after! gptel
+  ;; (setq! gptel-api-key #'my/openai-api-key
+  ;;        gptel-model 'gpt-5.2)
+
+  (setq!       gptel-default-mode 'org-mode)
+
+  ;; org-mode prompt/response prefixes
+  ;; Ensure these are alists (and avoid mutating a shared constant)
+  (setq gptel-prompt-prefix-alist
+        (if (listp gptel-prompt-prefix-alist)
+            (copy-alist gptel-prompt-prefix-alist)
+          nil)
+        gptel-response-prefix-alist
+        (if (listp gptel-response-prefix-alist)
+            (copy-alist gptel-response-prefix-alist)
+          nil))
+
+  (setf (alist-get 'org-mode gptel-prompt-prefix-alist) "@user\n"
+        (alist-get 'org-mode gptel-response-prefix-alist) "@assistant\n")
+
+  ;; Enable gptel's optional convenience integrations, including MCP helpers.
+  (require 'gptel-integrations)
+
+  ;; Ensure MCP client library is available (installed via packages.el).
+  (require 'mcp nil 'noerror)
+
+  ;; Optional: handy bindings (pick your own keys)
+  ;; (map! :leader
+  ;;       (:prefix ("a i" . "AI")
+  ;;        :desc "gptel tools menu"      "t" #'gptel-tools
+  ;;        :desc "MCP connect"          "c" #'gptel-mcp-connect
+  ;;        :desc "MCP disconnect"       "d" #'gptel-mcp-disconnect))
+  )
+
+;; gptel directives
+(after! gptel
+  ;; Keep 'default' directive intact; add a new one for your policy.
+  (add-to-list 'gptel-directives
+               '(retrieval-policy .
+                 "Retrieval policy (strict):
+- Do NOT read entire files by default.
+- First use: glob → grep (-n) to identify the minimum relevant locations.
+- Only extract small snippets around matches (±30 lines). Prefer head/tail.
+- Prefer summaries/indices over raw logs/CSVs; never ingest large tables wholesale.
+- If you must read a file, justify why and keep it to the smallest necessary region.
+- Always cite evidence as file:line-range.")))
+
+;; GPTEL TOOLS
+(after! gptel
+  (use-package! gptel-agent
+    :config
+    ;; Register gptel-agent’s tools + presets (web, local search/files, bash, etc.)
+    (gptel-agent-update)))
+
+
+(after! gptel
+  (use-package! llm-tool-collection
+    :defer t
+    :config
+    ;; Register just the filesystem + search categories for gptel:
+    ;; This is targeted and keeps the tool surface small.
+    (mapcar (apply-partially #'apply #'gptel-make-tool)
+            (llm-tool-collection-get-category "filesystem"))
+    (mapcar (apply-partially #'apply #'gptel-make-tool)
+            (llm-tool-collection-get-category "search"))))
+
+;;; Local tools
+(add-to-list 'load-path (expand-file-name "lisp" doom-user-dir))
+(require 'my-gptel-tools)
+(after! gptel
+  (my/gptel-register-tools))
+
+
+;; ;;; gptel tools (local dev)
+;; (let ((gptel-tools-dir (expand-file-name "~/Documents/gptel-tools")))
+;;   (when (file-directory-p gptel-tools-dir)
+;;     (add-to-list 'load-path gptel-tools-dir)))
+
+;; ;; Do not hard-fail startup/doom doctor if local dev code is broken or API changed.
+;; (with-eval-after-load 'gptel
+;;   (condition-case err
+;;       (progn
+;;         (require 'gptel-tools nil 'noerror)
+;;         ;; Call setup only if it exists (your code may be mid-refactor).
+;;         (when (fboundp 'gptel-tools-setup)
+;;           (gptel-tools-setup)))
+;;     (error
+;;      (message "[gptel-tools] disabled due to error: %S" err))))
