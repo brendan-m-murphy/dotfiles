@@ -57,19 +57,44 @@ All roots are canonicalized via `file-truename` and normalized with trailing sla
       (when r (push (my/gptel--tru-dir r) roots)))
     (cl-delete-duplicates (delq nil roots) :test #'string-equal)))
 
+;; (defun my/gptel--allowed-path-p (path)
+;;   "Return non-nil if PATH is under one of the allowed roots."
+;;   (let* ((tru (file-truename (expand-file-name path)))
+;;          (roots (my/gptel--allowed-roots)))
+;;     (cl-some (lambda (r) (string-prefix-p r tru)) roots)))
+
 (defun my/gptel--allowed-path-p (path)
   "Return non-nil if PATH is under one of the allowed roots."
-  (let* ((tru (file-truename (expand-file-name path)))
+  (let* ((expanded (expand-file-name path))
+         ;; Normalize directories with trailing slash so prefix tests work.
+         (tru (if (file-directory-p expanded)
+                  (file-name-as-directory (file-truename expanded))
+                (file-truename expanded)))
          (roots (my/gptel--allowed-roots)))
     (cl-some (lambda (r) (string-prefix-p r tru)) roots)))
 
+
+;; (defun my/gptel--assert-allowed (path)
+;;   "Signal a `user-error` if PATH is outside allowed roots."
+;;   (unless (my/gptel--allowed-path-p path)
+;;     (user-error "Path not allowed: %s (allowed roots: %s)"
+;;                 (file-truename (expand-file-name path))
+;;                 (string-join (my/gptel--allowed-roots) ", ")))
+;;   path)
+
 (defun my/gptel--assert-allowed (path)
   "Signal a `user-error` if PATH is outside allowed roots."
-  (unless (my/gptel--allowed-path-p path)
-    (user-error "Path not allowed: %s (allowed roots: %s)"
-                (file-truename (expand-file-name path))
-                (string-join (my/gptel--allowed-roots) ", ")))
+  (let* ((expanded (expand-file-name path))
+         ;; Normalize directories with trailing slash so prefix tests work.
+         (tru (if (file-directory-p expanded)
+                  (file-name-as-directory (file-truename expanded))
+                (file-truename expanded))))
+    (unless (cl-some (lambda (r) (string-prefix-p r tru))
+                     (my/gptel--allowed-roots))
+      (user-error "Path not allowed: %s (allowed roots: %s)"
+                  tru (string-join (my/gptel--allowed-roots) ", "))))
   path)
+
 
 (defun my/gptel--assert-text-file (path)
   ;; Very light heuristic: reject huge/binary-ish by checking for NUL in prefix.
@@ -94,10 +119,18 @@ All roots are canonicalized via `file-truename` and normalized with trailing sla
         (forward-line want-lines)
         (buffer-substring-no-properties beg (point))))))
 
+;; (defun my/gptel--default-dir ()
+;;   "Default directory for searches: project root or `default-directory`."
+;;   (file-name-as-directory
+;;    (file-truename (or (my/gptel--project-root) default-directory))))
+
 (defun my/gptel--default-dir ()
-  "Default directory for searches: project root or `default-directory`."
+  "Default directory for searches: project root, else an allowed root, else `default-directory`."
   (file-name-as-directory
-   (file-truename (or (my/gptel--project-root) default-directory))))
+   (file-truename
+    (or (my/gptel--project-root)
+        (car (my/gptel--allowed-roots))
+        default-directory))))
 
 ;;; Interactive convenience (for you, not for the model)
 
