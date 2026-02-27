@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# key: <n
+# name: name
+# --
+
+#+name: $1
+$0

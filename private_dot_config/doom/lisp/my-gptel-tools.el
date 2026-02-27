@@ -161,10 +161,28 @@ All roots are canonicalized via `file-truename` and normalized with trailing sla
   (message "Allowed roots: %s"
            (string-join (my/gptel--allowed-roots) ", ")))
 
+;;; Arg parsing helpers
+
+(defun my/gptel--args->plist (args names)
+  "If ARGS looks positional, convert it to a plist using NAMES order."
+  (cond
+   ;; Already a plist
+   ((and (consp args) (keywordp (car args))) args)
+   ;; Already an alist
+   ((and (consp args) (consp (car args))) args)
+   ;; Positional
+   (t
+    (let (plist)
+      (cl-loop for name in names
+               for val  in args
+               do (setq plist (plist-put plist (intern (concat ":" name)) val)))
+      plist))))
+
 ;;; Tool implementations
 
 (defun my/gptel-tool-list-files (&rest args)
   "List files under :dir matching :glob. Returns relative paths."
+  (setq args (my/gptel--args->plist args '("dir" "glob" "max")))
   (let* ((dir (file-name-as-directory
                (file-truename (expand-file-name (or (plist-get args :dir)
                                                     (my/gptel--default-dir))))))
@@ -178,6 +196,7 @@ All roots are canonicalized via `file-truename` and normalized with trailing sla
 
 (defun my/gptel-tool-rg (&rest args)
   "Ripgrep search under :dir for :pattern; optional :glob; capped."
+  (setq args (my/gptel--args->plist args '("dir" "pattern" "glob" "max")))
   (let* ((dir (file-name-as-directory
                (file-truename (expand-file-name (or (plist-get args :dir)
                                                     (my/gptel--default-dir))))))
@@ -201,6 +220,7 @@ All roots are canonicalized via `file-truename` and normalized with trailing sla
 
 (defun my/gptel-tool-read-range (&rest args)
   "Read file line range [start_line,end_line] (inclusive), capped."
+  (setq args (my/gptel--args->plist args '("path" "start_line" "end_line")))
   (let* ((path (expand-file-name (or (plist-get args :path) (user-error "Missing :path"))))
          (start (plist-get args :start_line))
          (end (plist-get args :end_line)))
@@ -208,12 +228,14 @@ All roots are canonicalized via `file-truename` and normalized with trailing sla
 
 (defun my/gptel-tool_head (&rest args)
   "Read first :n lines of :path, capped."
+  (setq args (my/gptel--args->plist args '("path" "n")))
   (let* ((path (expand-file-name (or (plist-get args :path) (user-error "Missing :path"))))
          (n (min my/gptel-max-lines (or (plist-get args :n) 60))))
     (my/gptel--read-lines path 1 n)))
 
 (defun my/gptel-tool_tail (&rest args)
   "Read last :n lines of :path, capped (from first max-bytes chunk)."
+  (setq args (my/gptel--args->plist args '("path" "n")))
   (let* ((path (expand-file-name (or (plist-get args :path) (user-error "Missing :path"))))
          (n (min my/gptel-max-lines (or (plist-get args :n) 60))))
     (my/gptel--assert-allowed path)

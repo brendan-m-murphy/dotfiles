@@ -1,0 +1,29 @@
+# -*- mode: snippet -*-
+# name: jupyter-header
+# key: jupyter
+# --
+
+#+property: header-args:jupyter-python :kernel ${1:inversions} :session $2 :async yes :exports ${3:both}
+
+#+begin_src elisp
+(setq-local org-image-actual-width '(900))
+(setq jupyter-repl-maximum-output 5000)
+#+end_src
+
+#+begin_src jupyter-python
+%load_ext autoreload
+%autoreload 2
+#+end_src
+
+#+begin_src jupyter-python
+from pathlib import Path
+#+end_src
+
+#+begin_src jupyter-python
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import xarray as xr
+#+end_src
+
+$0

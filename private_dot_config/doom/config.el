@@ -38,6 +38,18 @@
 ;; numbers are disabled. For relative line numbers, set this to `relative'.
 (setq display-line-numbers-type t)
 
+;; spacer window for wide monitor
+(defun my/create-left-side-window ()
+  "Create a persistent 1/9 width window on the left."
+  (interactive)
+  (let ((window (display-buffer-in-side-window
+                 (get-buffer-create "*left-side*")
+                 '((side . left)
+                   (slot . 0)
+                   (window-width . 0.11)))))
+    (set-window-dedicated-p window t)))
+
+
 ;; If you use `org' and don't want your org files in the default location below,
 ;; change `org-directory'. It must be set before org loads!
 (setq org-directory "~/Documents/org/")
@@ -138,7 +150,7 @@
   (let ((path
          (cond ((string= x "home") "/user/home/bm13805/")
                ((string= x "work") "/user/work/bm13805/")
-               ((string= x "acrg") "/group/chemistry/acrg/")
+               ((string= x "acrg") "/group/chem/acrg/")
                )
          ))
     (find-file (format "/sshx:bm13805@bp1:%s" path))
@@ -447,8 +459,24 @@
 ;;; Local tools
 (add-to-list 'load-path (expand-file-name "lisp" doom-user-dir))
 (require 'my-gptel-tools)
+(require 'my-gptel-org-workflow)
 (after! gptel
-  (my/gptel-register-tools))
+  (my/gptel-register-tools)
+  (my/gptel-org-workflow-enable)
+
+  ;; Optional: use hierarchical Org context
+  (setq gptel-use-context 'org)
+
+  (map! :leader
+        :desc "New GPT conversation entry"
+        "a n" #'my/gptel-new-entry)
+  (map! :leader
+        :desc "New GPT topic"
+        "a t" #'my/gptel-new-topic)
+  (map! :leader
+        :desc "gptel add reference (this file)" "a r" #'my/gptel-add-reference
+        :desc "gptel add reference (open buffers)" "a R" #'my/gptel-add-reference-from-open-buffers
+        :desc "gptel insert reference block" "a b" #'my/gptel-insert-reference-block))
 
 
 ;; ;;; gptel tools (local dev)

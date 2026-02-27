@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: bib
+# key: bib
+# --
+#+bibliography: /Users/bm13805/Dropbox/acrg_library.bib

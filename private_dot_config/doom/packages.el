@@ -69,10 +69,15 @@
 ;;(package! jupyter :pin "053a78da252b19cf59cefe6b83f9c4531a38d6b2")
 
 ;; emacs-zmq (dependency for emacs-jupyter)
-(package! emacs-zmq
+;; this is causing problems... commenting it out and trying a ChatGPT recommendation
+;; (package! emacs-zmq
+;;   :recipe (:host github
+;;            :repo "nnicandro/emacs-zmq"))
+;; ;;  :pin "af5299d80715b1083a18145e9c84ef9563020676")
+(package! zmq
   :recipe (:host github
-           :repo "nnicandro/emacs-zmq"))
-;;  :pin "af5299d80715b1083a18145e9c84ef9563020676")
+           :repo "nnicandro/emacs-zmq"
+           :files ("*.el" "Makefile" "src" "gen-constants.awk" "README.org" "COPYING")))
 
 
 (package! googledocstrings
