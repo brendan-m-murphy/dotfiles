@@ -63,16 +63,31 @@ All roots are canonicalized via `file-truename` and normalized with trailing sla
 ;;          (roots (my/gptel--allowed-roots)))
 ;;     (cl-some (lambda (r) (string-prefix-p r tru)) roots)))
 
-(defun my/gptel--allowed-path-p (path)
-  "Return non-nil if PATH is under one of the allowed roots."
-  (let* ((expanded (expand-file-name path))
-         ;; Normalize directories with trailing slash so prefix tests work.
-         (tru (if (file-directory-p expanded)
-                  (file-name-as-directory (file-truename expanded))
-                (file-truename expanded)))
-         (roots (my/gptel--allowed-roots)))
-    (cl-some (lambda (r) (string-prefix-p r tru)) roots)))
+;; (defun my/gptel--allowed-path-p (path)
+;;   "Return non-nil if PATH is under one of the allowed roots."
+;;   (let* ((expanded (expand-file-name path))
+;;          ;; Normalize directories with trailing slash so prefix tests work.
+;;          (tru (if (file-directory-p expanded)
+;;                   (file-name-as-directory (file-truename expanded))
+;;                 (file-truename expanded)))
+;;          (roots (my/gptel--allowed-roots)))
+;;     (cl-some (lambda (r) (string-prefix-p r tru)) roots)))
 
+(defun my/gptel--allowed-path-p (path)
+  "Return non-nil if PATH is under one of the allowed roots.
+
+Remote/TRAMP paths are rejected early to avoid triggering connections via
+`file-truename` when VPN/SSH is unavailable."
+  (let* ((expanded (expand-file-name path)))
+    ;; Do not touch TRAMP paths at all.
+    (when (file-remote-p expanded)
+      (cl-return-from my/gptel--allowed-path-p nil))
+    (let* (;; Normalize directories with trailing slash so prefix tests work.
+           (tru (if (file-directory-p expanded)
+                    (file-name-as-directory (file-truename expanded))
+                  (file-truename expanded)))
+           (roots (my/gptel--allowed-roots)))
+      (cl-some (lambda (r) (string-prefix-p r tru)) roots))))
 
 ;; (defun my/gptel--assert-allowed (path)
 ;;   "Signal a `user-error` if PATH is outside allowed roots."
