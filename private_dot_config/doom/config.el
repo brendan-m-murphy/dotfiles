@@ -495,7 +495,13 @@
   (map! :leader
         :desc "gptel add reference (this file)" "a r" #'my/gptel-add-reference
         :desc "gptel add reference (open buffers)" "a R" #'my/gptel-add-reference-from-open-buffers
-        :desc "gptel insert reference block" "a b" #'my/gptel-insert-reference-block))
+        :desc "gptel insert reference block" "a b" #'my/gptel-insert-reference-block)
+  (map! :leader
+        :desc "Mark buffer relevant" "a m" #'my/gptel-mark-buffer-relevant
+        :desc "Unmark buffer relevant" "a u" #'my/gptel-unmark-buffer-relevant
+        :desc "Show relevant buffers" "a M" #'my/gptel-show-relevant-buffers
+        :desc "Clear relevant buffers" "a C" #'my/gptel-clear-relevant-buffers
+        :desc "Mark project buffers relevant" "a p" #'my/gptel-mark-project-buffers-relevant))
 
 (use-package! macher
   :after gptel

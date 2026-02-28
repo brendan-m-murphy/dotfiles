@@ -102,12 +102,18 @@ These must be defined in `my-gptel-tools.el`."
       "- Prefer pathlib."
       "- Avoid overengineering; prioritise scientific readability."
       ""
+      "Relevant buffers are explicitly marked by the user."
+      "Use tools: list_relevant_buffers, search_buffer, read_buffer_range."
+      "Prefer search_buffer to reading large ranges."
+      ""
       "When files are mentioned, use available tools (list_files, rg, read_range, head, tail) rather than assuming contents."
       ""
       "Reference policy:"
       "- Lines starting with \"Relevant file:\" and Org links like [[file:...]] are pointers."
       "- Use tools (rg/read_range/head/tail) to inspect them; do not assume contents."
-      "")
+      ""
+      "If the file is currently open, prefer buffer tools over filesystem tools."
+      )
      "\n")))
 
 ;;; ------------------------------------------------------------------
@@ -202,6 +208,47 @@ With prefix arg (C-u), prompt for a file."
   (insert "Relevant files (inspect via tools as needed):\n")
   (dolist (f my/gptel-ref-history)
     (insert (format "Relevant file: [[file:%s]]\n" (my/gptel--best-relative-path f)))))
+
+;;; ------------------------------------------------------------------
+;;; Buffer references
+;;; ------------------------------------------------------------------
+
+(defun my/gptel-mark-buffer-relevant (&optional buffer)
+  (interactive)
+  (let ((name (buffer-name (or buffer (current-buffer)))))
+    (add-to-list 'my/gptel-relevant-buffers name)
+    (message "Marked relevant: %s" name)))
+
+(defun my/gptel-unmark-buffer-relevant (&optional buffer)
+  (interactive)
+  (let ((name (buffer-name (or buffer (current-buffer)))))
+    (setq my/gptel-relevant-buffers
+          (delete name my/gptel-relevant-buffers))
+    (message "Unmarked relevant: %s" name)))
+
+(defun my/gptel-clear-relevant-buffers ()
+  (interactive)
+  (setq my/gptel-relevant-buffers nil)
+  (message "Cleared relevant buffers"))
+
+(defun my/gptel-show-relevant-buffers ()
+  (interactive)
+  (message "Relevant buffers: %s"
+           (if my/gptel-relevant-buffers
+               (string-join my/gptel-relevant-buffers ", ")
+             "(none)")))
+
+(defun my/gptel-mark-project-buffers-relevant ()
+  (interactive)
+  (unless (fboundp 'projectile-project-buffers)
+    (user-error "projectile not available"))
+  (let ((n 0))
+    (dolist (b (projectile-project-buffers))
+      (with-current-buffer b
+        (when (buffer-file-name)
+          (my/gptel-mark-buffer-relevant b)
+          (cl-incf n))))
+    (message "Marked %d project buffers relevant" n)))
 
 ;;; ------------------------------------------------------------------
 ;;; Topic Enforcement

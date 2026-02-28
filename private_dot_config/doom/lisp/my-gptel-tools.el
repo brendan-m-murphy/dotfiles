@@ -261,6 +261,90 @@ Remote/TRAMP paths are rejected early to avoid triggering connections via
              (take (last lines (min n (length lines)))))
         (mapconcat #'identity take "\n")))))
 
+;;; ------------------------------------------------------------------
+;;; Relevant buffer tools
+;;; ------------------------------------------------------------------
+
+(defvar my/gptel-relevant-buffers nil
+  "List of buffer names explicitly marked as relevant for gptel buffer tools.")
+
+(defun my/gptel--buffer-live-p (name)
+  (when-let ((buf (get-buffer name)))
+    (buffer-live-p buf)))
+
+(defun my/gptel--assert-relevant-buffer (name)
+  (unless (member name my/gptel-relevant-buffers)
+    (user-error "Buffer not marked relevant: %s" name))
+  (unless (my/gptel--buffer-live-p name)
+    (user-error "Buffer not live: %s" name))
+  name)
+
+(defun my/gptel-tool-list-relevant-buffers (&rest _args)
+  "List buffers marked relevant (one per line)."
+  (setq my/gptel-relevant-buffers
+        (cl-remove-if-not #'my/gptel--buffer-live-p my/gptel-relevant-buffers))
+  (string-join my/gptel-relevant-buffers "\n"))
+
+(defun my/gptel-tool-read-buffer-range (&rest args)
+  "Read inclusive line range [start_line,end_line] from a relevant buffer."
+  (setq args (my/gptel--args->plist args '("buffer" "start_line" "end_line")))
+  (let* ((name (plist-get args :buffer))
+         (start (max 1 (or (plist-get args :start_line) 1)))
+         (end   (max start (or (plist-get args :end_line) (+ start 60))))
+         (want  (min my/gptel-max-lines (1+ (- end start)))))
+    (my/gptel--assert-relevant-buffer name)
+    (with-current-buffer name
+      (save-excursion
+        (goto-char (point-min))
+        (forward-line (1- start))
+        (let ((beg (point)))
+          (forward-line want)
+          (buffer-substring-no-properties beg (point)))))))
+
+(defun my/gptel-tool-search-buffer (&rest args)
+  "Search relevant buffers for PATTERN.
+Optional args:
+  buffer   – restrict to one buffer
+  context  – number of context lines before/after match (like grep -C)"
+  (setq args (my/gptel--args->plist args '("buffer" "pattern" "context")))
+  (let* ((pattern (or (plist-get args :pattern)
+                      (user-error "Missing :pattern")))
+         (context (max 0 (or (plist-get args :context) 0)))
+         (buffers
+          (if-let ((name (plist-get args :buffer)))
+              (progn
+                (my/gptel--assert-relevant-buffer name)
+                (list name))
+            (cl-remove-if-not #'my/gptel--buffer-live-p
+                              my/gptel-relevant-buffers)))
+         (max-lines my/gptel-max-lines)
+         (results '())
+         (lines-used 0))
+    (dolist (name buffers)
+      (with-current-buffer name
+        (save-excursion
+          (goto-char (point-min))
+          (while (and (< lines-used max-lines)
+                      (re-search-forward pattern nil t))
+            (let* ((match-line (line-number-at-pos))
+                   (start-line (max 1 (- match-line context)))
+                   (end-line   (+ match-line context)))
+              (save-excursion
+                (goto-char (point-min))
+                (forward-line (1- start-line))
+                (let ((block-start (point)))
+                  (forward-line (1+ (- end-line start-line)))
+                  (let* ((text (buffer-substring-no-properties block-start (point)))
+                         (header (format "Buffer: %s (match at line %d)\n"
+                                         name match-line))
+                         (chunk (concat header text "\n")))
+                    (setq results (cons chunk results))
+                    (cl-incf lines-used
+                             (1+ (- end-line start-line)))))))))))
+    (if results
+        (mapconcat #'identity (nreverse results) "\n")
+      "")))
+
 ;;; Registration
 
 (defun my/gptel-register-tools ()
@@ -304,7 +388,28 @@ Call this from an (after! gptel ...) block."
      :function #'my/gptel-tool_tail
      :description "Read last n lines of path, capped (from first max-bytes chunk)."
      :args '((:name "path" :type "string")
-             (:name "n"    :type "number" :optional t)))))
+             (:name "n"    :type "number" :optional t)))
+    (gptel-make-tool
+     :name "list_relevant_buffers"
+     :function #'my/gptel-tool-list-relevant-buffers
+     :description "List buffers explicitly marked relevant by the user."
+     :args '())
+
+    (gptel-make-tool
+     :name "read_buffer_range"
+     :function #'my/gptel-tool-read-buffer-range
+     :description "Read buffer line range [start_line,end_line] (inclusive) from a relevant buffer."
+     :args '((:name "buffer"     :type "string")
+             (:name "start_line" :type "number" :optional t)
+             (:name "end_line"   :type "number" :optional t)))
+
+    (gptel-make-tool
+     :name "search_buffer"
+     :function #'my/gptel-tool-search-buffer
+     :description "Search relevant buffers for a regexp pattern, optionally with context lines."
+     :args '((:name "pattern" :type "string")
+             (:name "buffer"  :type "string" :optional t)
+             (:name "context" :type "number" :optional t)))))
 
 (provide 'my-gptel-tools)
 ;;; my-gptel-tools.el ends here
