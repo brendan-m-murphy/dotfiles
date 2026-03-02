@@ -18,18 +18,13 @@
      (goto-char (point-min))
      ,@body))
 
-(defun my/gptel-test--response-region (start-marker end-marker)
-  "Return plist suitable for gptel callback INFO."
-  (list :beg start-marker :end end-marker))
-
 (ert-deftest my/gptel-normalize-response-headings-relative-normalization ()
   (my/gptel-test--with-org-buffer
       "** Topic\n*** Conversation\n@assistant:\n\n** A\n*** B\n"
     (search-forward "** A")
     (let ((beg (match-beginning 0))
           (end (point-max)))
-      (my/gptel-normalize-response-headings nil
-                                            (my/gptel-test--response-region beg end)))
+      (my/gptel-normalize-response-headings beg end))
     (should (string-match-p
              (regexp-quote "**** A\n***** B\n")
              (buffer-string)))))
@@ -40,8 +35,7 @@
     (search-forward "**/ A")
     (let ((beg (match-beginning 0))
           (end (point-max)))
-      (my/gptel-normalize-response-headings nil
-                                            (my/gptel-test--response-region beg end)))
+      (my/gptel-normalize-response-headings beg end))
     (should (string-match-p
              (regexp-quote "**** A\n")
              (buffer-string)))))
@@ -53,8 +47,7 @@
       (search-forward "Plain text.")
       (let ((beg (line-beginning-position))
             (end (point-max)))
-        (my/gptel-normalize-response-headings nil
-                                              (my/gptel-test--response-region beg end)))
+        (my/gptel-normalize-response-headings beg end))
       (should (equal before (buffer-string))))))
 
 (ert-deftest my/gptel-normalize-response-headings-does-not-modify-outside-region ()
@@ -73,8 +66,7 @@
               (concat (buffer-substring-no-properties (point-min) beg)
                       "<REGION>"
                       (buffer-substring-no-properties end (point-max))))
-        (my/gptel-normalize-response-headings nil
-                                              (list :beg beg-marker :end end-marker))
+        (my/gptel-normalize-response-headings beg-marker end-marker)
         (setq outside-after
               (concat (buffer-substring-no-properties
                        (point-min)
@@ -100,8 +92,7 @@
     (search-forward "***** Deep")
     (let ((beg (match-beginning 0))
           (end (point-max)))
-      (my/gptel-normalize-response-headings nil
-                                            (my/gptel-test--response-region beg end)))
+      (my/gptel-normalize-response-headings beg end))
     (should (string-match-p (regexp-quote "***** Deep
 ")
                             (buffer-string)))))
@@ -118,9 +109,7 @@
     (search-forward "** A")
     (let ((beg (match-beginning 0))
           (end (point-max)))
-      (my/gptel-normalize-response-headings
-       nil
-       (my/gptel-test--response-region beg end)))
+      (my/gptel-normalize-response-headings beg end))
     ;; Must normalize relative to the level-3 conversation, not the level-2 topic
     (should (string-match-p "**** A" (buffer-string)))))
 
@@ -131,8 +120,7 @@
       (search-forward "** A")
       (let ((beg (match-beginning 0))
             (end (point-max)))
-        (my/gptel-normalize-response-headings nil
-                                              (my/gptel-test--response-region beg end)))
+        (my/gptel-normalize-response-headings beg end))
       (should (equal before (buffer-string))))))
 
 (ert-deftest my/gptel-normalize-response-headings-clamps-target-min-to-4 ()
@@ -141,8 +129,7 @@
     (search-forward "** A")
     (let ((beg (match-beginning 0))
           (end (point-max)))
-      (my/gptel-normalize-response-headings nil
-                                            (my/gptel-test--response-region beg end)))
+      (my/gptel-normalize-response-headings beg end))
     (should (string-match-p
              (regexp-quote "**** A\n***** B\n")
              (buffer-string)))))
@@ -153,10 +140,20 @@
     (search-forward "* Too shallow")
     (let ((beg (match-beginning 0))
           (end (point-max)))
-      (my/gptel-normalize-response-headings nil
-                                            (my/gptel-test--response-region beg end)))
+      (my/gptel-normalize-response-headings beg end))
     (should (string-match-p (regexp-quote "**** Too shallow\n")
                             (buffer-string)))))
+
+(ert-deftest my/gptel-normalize-response-headings-integration-clamps-to-conversation-depth ()
+  (my/gptel-test--with-org-buffer
+      "** Topic\n*** Question\n@assistant:\n\n*** Outline\n**/ Detail\n"
+    (search-forward "*** Outline")
+    (let ((beg (match-beginning 0))
+          (end (point-max)))
+      (my/gptel-normalize-response-headings beg end))
+    (should (string-match-p
+             (regexp-quote "**** Outline\n**** Detail\n")
+             (buffer-string)))))
 
 (provide 'my-gptel-org-workflow-tests)
 ;;; my-gptel-org-workflow-tests.el ends here

@@ -395,14 +395,12 @@ use `gptel-send` (e.g. C-c RET) as usual."
 ;;                (concat (make-string min-level ?*) " ")
 ;;                nil nil))))))))
 
-(defun my/gptel-normalize-response-headings (_response info)
+(defun my/gptel-normalize-response-headings (beg end)
   "Normalize assistant response headings relative to containing heading.
 
-This operates only on the inserted response region from INFO (:beg/:end)."
+This operates only on the inserted response region from BEG to END."
   (when (derived-mode-p 'org-mode)
-    (let* ((beg (plist-get info :beg))
-           (end (plist-get info :end))
-           base-depth)
+    (let (base-depth)
       (when (and (integer-or-marker-p beg)
                  (integer-or-marker-p end)
                  (< beg end))
