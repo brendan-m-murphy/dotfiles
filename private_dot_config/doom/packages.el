@@ -112,5 +112,7 @@
 (package! llm-tool-collection
   :recipe (:host github :repo "skissue/llm-tool-collection"))
 
+(package! macher)
+
 ;; mcp
 (package! mcp)
