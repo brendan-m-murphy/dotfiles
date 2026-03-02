@@ -22,6 +22,7 @@ jobs:
       - name: Run ERT tests
         run: |
           emacs -Q --batch \
+            --eval "(provide 'gptel)" \
             -l org \
             -l private_dot_config/doom/lisp/my-gptel-org-workflow.el \
             -l private_dot_config/doom/lisp/tests/my-gptel-org-workflow-tests.el \
