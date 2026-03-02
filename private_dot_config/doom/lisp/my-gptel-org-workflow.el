@@ -407,9 +407,14 @@ This operates only on the inserted response region from INFO (:beg/:end)."
                  (integer-or-marker-p end)
                  (< beg end))
         (save-excursion
-          (goto-char (max (point-min) (1- beg)))
-          (org-back-to-heading t)
-          (setq base-depth (org-current-level)))
+          (setq base-depth
+                (condition-case nil
+                    (progn
+                      (goto-char (max (point-min) (1- beg)))
+                      (org-back-to-heading t)
+                      (org-current-level))
+                  (error nil))))
+        (when base-depth
         (save-excursion
           (save-restriction
             (let ((beg-marker (copy-marker beg))
@@ -439,8 +444,8 @@ This operates only on the inserted response region from INFO (:beg/:end)."
                           (setq min-depth (if min-depth (min min-depth depth) depth))))
 
                       (when saw-heading
-                        (setq target-min (1+ base-depth)
-                              delta (- target-min min-depth))
+                        (setq target-min (max 4 (1+ base-depth))
+                              delta (max 0 (- target-min min-depth)))
 
                         (setq headings (sort headings (lambda (a b) (> (car a) (car b)))))
 
@@ -460,7 +465,7 @@ This operates only on the inserted response region from INFO (:beg/:end)."
                         (when saw-depth-one
                           (error "Heading depth invariant violated in response region")))))
                 (set-marker beg-marker nil)
-                (set-marker end-marker nil)))))))))
+                (set-marker end-marker nil))))))))))
 
 ;;; ------------------------------------------------------------------
 ;;; Activation
