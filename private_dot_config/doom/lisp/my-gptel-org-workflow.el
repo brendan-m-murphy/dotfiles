@@ -456,7 +456,7 @@ This operates only on the inserted response region from INFO (:beg/:end)."
                         (when saw-depth-one
                           (error "Heading depth invariant violated in response region")))))
                 (set-marker beg-marker nil)
-                (set-marker end-marker nil))))))))
+                (set-marker end-marker nil)))))))))
 
 ;;; ------------------------------------------------------------------
 ;;; Activation
