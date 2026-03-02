@@ -412,45 +412,51 @@ This operates only on the inserted response region from INFO (:beg/:end)."
           (setq base-depth (org-current-level)))
         (save-excursion
           (save-restriction
-            (narrow-to-region beg end)
-            (goto-char (point-min))
-            ;; Repair malformed heading prefixes like "**/" -> "** ".
-            (while (re-search-forward "^\\(\\*+\\)/[ \t]*" nil t)
-              (replace-match (concat (match-string 1) " ") nil nil))
+            (let ((beg-marker (copy-marker beg))
+                  (end-marker (copy-marker end t)))
+              (unwind-protect
+                  (progn
+                    (narrow-to-region beg-marker end-marker)
+                    (goto-char (point-min))
+                    ;; Repair malformed heading prefixes like "**/" -> "** ".
+                    (while (re-search-forward "^\\(\\*+\\)/[ \t]*" nil t)
+                      (replace-match (concat (match-string 1) " ") nil nil))
 
-            (let ((headings nil)
-                  min-depth
-                  target-min
-                  delta
-                  saw-depth-one)
-              (goto-char (point-min))
-              (while (re-search-forward "^\\(\\*+\\)[ \t]" nil t)
-                (let ((pos (match-beginning 0))
-                      (depth (length (match-string 1))))
-                  (push (cons pos depth) headings)
-                  (when (= depth 1)
-                    (setq saw-depth-one t))
-                  (setq min-depth (if min-depth (min min-depth depth) depth))))
+                    (let ((headings nil)
+                          min-depth
+                          target-min
+                          delta
+                          saw-depth-one)
+                      (goto-char (point-min))
+                      (while (re-search-forward "^\\(\\*+\\)[ \t]" nil t)
+                        (let ((pos (match-beginning 0))
+                              (depth (length (match-string 1))))
+                          (push (cons pos depth) headings)
+                          (when (= depth 1)
+                            (setq saw-depth-one t))
+                          (setq min-depth (if min-depth (min min-depth depth) depth))))
 
-              (when headings
-                (setq target-min (1+ base-depth)
-                      delta (- target-min min-depth))
+                      (when headings
+                        (setq target-min (1+ base-depth)
+                              delta (- target-min min-depth))
 
-                ;; `headings` is collected with `push`, so iteration runs bottom to top.
-                (dolist (h headings)
-                  (goto-char (car h))
-                  (when (looking-at "^\\(\\*+\\)\\([ \t]\\)")
-                    (let* ((old-depth (length (match-string 1)))
-                           (new-depth (max old-depth (+ old-depth delta)))
-                           (new-prefix (concat (make-string new-depth ?*) (match-string 2))))
-                      (replace-match new-prefix nil nil))))
+                        ;; `headings` is collected with `push`, so iteration runs bottom to top.
+                        (dolist (h headings)
+                          (goto-char (car h))
+                          (when (looking-at "^\\(\\*+\\)\\([ \t]\\)")
+                            (let* ((old-depth (length (match-string 1)))
+                                   (new-depth (max old-depth (+ old-depth delta)))
+                                   (new-prefix (concat (make-string new-depth ?*) (match-string 2))))
+                              (replace-match new-prefix nil nil))))
 
-                (goto-char (point-min))
-                (while (re-search-forward "^\\(\\*+\\)[ \t]" nil t)
-                  (when (< (length (match-string 1)) target-min)
-                    (error "Heading depth invariant violated in response region")))
-                (when saw-depth-one
-                  (error "Heading depth invariant violated in response region"))))))))))
+                        (goto-char (point-min))
+                        (while (re-search-forward "^\\(\\*+\\)[ \t]" nil t)
+                          (when (< (length (match-string 1)) target-min)
+                            (error "Heading depth invariant violated in response region")))
+                        (when saw-depth-one
+                          (error "Heading depth invariant violated in response region")))))
+                (set-marker beg-marker nil)
+                (set-marker end-marker nil))))))))
 
 ;;; ------------------------------------------------------------------
 ;;; Activation
