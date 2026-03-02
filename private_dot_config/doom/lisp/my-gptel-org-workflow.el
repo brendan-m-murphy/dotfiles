@@ -431,12 +431,12 @@ This operates only on the inserted response region from INFO (:beg/:end)."
 
               (when headings
                 (setq target-min (1+ base-depth)
-                      delta (max 0 (- target-min min-depth)))
+                      delta (- target-min min-depth))
 
-                (dolist (h (nreverse headings))
+                (dolist (h headings)
                   (goto-char (car h))
                   (when (looking-at "^\\(\\*+\\)\\([ \t]\\)")
-                    (let* ((new-depth (+ (cdr h) delta))
+                    (let* ((new-depth (max (cdr h) (+ (cdr h) delta)))
                            (new-prefix (concat (make-string new-depth ?*) (match-string 2))))
                       (replace-match new-prefix nil nil))))
 
