@@ -462,6 +462,25 @@
 (require 'my-gptel-org-workflow)
 (after! gptel
   (my/gptel-register-tools)
+
+  ;; Make local filesystem + buffer tools the default active toolset.
+  ;; These names must match the :name fields in my-gptel-tools.el.
+  (setq gptel-tools
+        (mapcar #'gptel-get-tool
+                '(
+                  ;; Filesystem tools
+                  "list_files"
+                  "rg"
+                  "read_range"
+                  "head"
+                  "tail"
+
+                  ;; Buffer tools
+                  "list_relevant_buffers"
+                  "read_buffer_range"
+                  "search_buffer"
+                  )))
+
   (my/gptel-org-workflow-enable)
 
   ;; Optional: use hierarchical Org context
@@ -477,6 +496,14 @@
         :desc "gptel add reference (this file)" "a r" #'my/gptel-add-reference
         :desc "gptel add reference (open buffers)" "a R" #'my/gptel-add-reference-from-open-buffers
         :desc "gptel insert reference block" "a b" #'my/gptel-insert-reference-block))
+
+(use-package! macher
+  :after gptel
+  :custom
+  (macher-action-buffer-ui 'org)
+  :config
+  (macher-install)
+  (macher-enable))
 
 
 ;; ;;; gptel tools (local dev)
