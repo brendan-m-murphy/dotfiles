@@ -124,6 +124,29 @@
     ;; Must normalize relative to the level-3 conversation, not the level-2 topic
     (should (string-match-p "**** A" (buffer-string)))))
 
+(ert-deftest my/gptel-normalize-response-headings-no-parent-heading-safe-noop ()
+  (my/gptel-test--with-org-buffer
+      "Plain prelude\n\n** A\n*** B\n"
+    (let ((before (buffer-string)))
+      (search-forward "** A")
+      (let ((beg (match-beginning 0))
+            (end (point-max)))
+        (my/gptel-normalize-response-headings nil
+                                              (my/gptel-test--response-region beg end)))
+      (should (equal before (buffer-string))))))
+
+(ert-deftest my/gptel-normalize-response-headings-clamps-target-min-to-4 ()
+  (my/gptel-test--with-org-buffer
+      "* L1 Parent\n\n** A\n*** B\n"
+    (search-forward "** A")
+    (let ((beg (match-beginning 0))
+          (end (point-max)))
+      (my/gptel-normalize-response-headings nil
+                                            (my/gptel-test--response-region beg end)))
+    (should (string-match-p
+             (regexp-quote "**** A\n***** B\n")
+             (buffer-string)))))
+
 (ert-deftest my/gptel-normalize-response-headings-signals-on-depth-invariant-violation ()
   (my/gptel-test--with-org-buffer
       "** Topic\n*** Conversation\n* Too shallow\n"
