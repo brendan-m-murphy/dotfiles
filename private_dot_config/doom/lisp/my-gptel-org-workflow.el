@@ -442,7 +442,9 @@ This operates only on the inserted response region from INFO (:beg/:end)."
                         (setq target-min (1+ base-depth)
                               delta (- target-min min-depth))
 
-                        ;; `headings` is collected with `push`, so iteration is bottom to top.
+                        (setq headings (sort headings (lambda (a b) (> (car a) (car b)))))
+
+                        ;; Apply replacements from bottom to top to avoid stale positions.
                         (dolist (h headings)
                           (goto-char (car h))
                           (when (looking-at "^\\(\\*+\\)\\([ \t]\\)")
