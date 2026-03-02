@@ -450,7 +450,7 @@ This operates only on the inserted response region from INFO (:beg/:end)."
                   (when (< (length (match-string 1)) target-min)
                     (error "Heading depth invariant violated in response region")))
                 (when saw-depth-one
-                  (error "Heading depth invariant violated in response region")))))))))))
+                  (error "Heading depth invariant violated in response region"))))))))))
 
 ;;; ------------------------------------------------------------------
 ;;; Activation
