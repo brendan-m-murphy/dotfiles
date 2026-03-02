@@ -64,17 +64,27 @@
           (outside-after nil))
       (search-forward "** A")
       (let ((beg (match-beginning 0))
-            (end (progn (search-forward "\n* Tail") (match-beginning 0))))
+            (end (progn (search-forward "\n* Tail") (match-beginning 0)))
+            beg-marker
+            end-marker)
+        (setq beg-marker (copy-marker beg)
+              end-marker (copy-marker end t))
         (setq outside-before
               (concat (buffer-substring-no-properties (point-min) beg)
                       "<REGION>"
                       (buffer-substring-no-properties end (point-max))))
         (my/gptel-normalize-response-headings nil
-                                              (my/gptel-test--response-region beg end))
+                                              (list :beg beg-marker :end end-marker))
         (setq outside-after
-              (concat (buffer-substring-no-properties (point-min) beg)
+              (concat (buffer-substring-no-properties
+                       (point-min)
+                       (marker-position beg-marker))
                       "<REGION>"
-                      (buffer-substring-no-properties end (point-max)))))
+                      (buffer-substring-no-properties
+                       (marker-position end-marker)
+                       (point-max))))
+        (set-marker beg-marker nil)
+        (set-marker end-marker nil))
       (should (equal outside-before outside-after)))))
 
 
