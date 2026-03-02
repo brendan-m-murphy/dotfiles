@@ -422,32 +422,30 @@ This operates only on the inserted response region from INFO (:beg/:end)."
                     (while (re-search-forward "^\\(\\*+\\)/[ \t]*" nil t)
                       (replace-match (concat (match-string 1) " ") nil nil))
 
-                    (let ((headings nil)
-                          min-depth
+                    (let (min-depth
                           target-min
                           delta
-                          saw-depth-one)
+                          saw-depth-one
+                          saw-heading)
                       (goto-char (point-min))
                       (while (re-search-forward "^\\(\\*+\\)[ \t]" nil t)
-                        (let ((pos (match-beginning 0))
-                              (depth (length (match-string 1))))
-                          (push (cons pos depth) headings)
+                        (let ((depth (length (match-string 1))))
+                          (setq saw-heading t)
                           (when (= depth 1)
                             (setq saw-depth-one t))
                           (setq min-depth (if min-depth (min min-depth depth) depth))))
 
-                      (when headings
+                      (when saw-heading
                         (setq target-min (1+ base-depth)
                               delta (- target-min min-depth))
 
-                        ;; `headings` is collected with `push`, so iteration runs bottom to top.
-                        (dolist (h headings)
-                          (goto-char (car h))
-                          (when (looking-at "^\\(\\*+\\)\\([ \t]\\)")
-                            (let* ((old-depth (length (match-string 1)))
-                                   (new-depth (max old-depth (+ old-depth delta)))
-                                   (new-prefix (concat (make-string new-depth ?*) (match-string 2))))
-                              (replace-match new-prefix nil nil))))
+                        ;; Rewrite from bottom to top to avoid offset corruption.
+                        (goto-char (point-max))
+                        (while (re-search-backward "^\\(\\*+\\)\\([ \t]\\)" nil t)
+                          (let* ((old-depth (length (match-string 1)))
+                                 (new-depth (max old-depth (+ old-depth delta)))
+                                 (new-prefix (concat (make-string new-depth ?*) (match-string 2))))
+                            (replace-match new-prefix nil nil)))
 
                         (goto-char (point-min))
                         (while (re-search-forward "^\\(\\*+\\)[ \t]" nil t)
