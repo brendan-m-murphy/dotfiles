@@ -395,27 +395,76 @@ use `gptel-send` (e.g. C-c RET) as usual."
 ;;                (concat (make-string min-level ?*) " ")
 ;;                nil nil))))))))
 
-(defun my/gptel-demote-headings (_response info)
-  "Safely ensure assistant headings inside inserted response
-are at least MIN-LEVEL deep."
+(defun my/gptel-normalize-response-headings (_response info)
+  "Normalize assistant response headings relative to containing heading.
+
+This operates only on the inserted response region from INFO (:beg/:end)."
   (when (derived-mode-p 'org-mode)
-    (let ((beg (plist-get info :beg))
-          (end (plist-get info :end))
-          (min-level 4))
+    (let* ((beg (plist-get info :beg))
+           (end (plist-get info :end))
+           base-depth)
       (when (and (integer-or-marker-p beg)
                  (integer-or-marker-p end)
                  (< beg end))
         (save-excursion
-          (save-restriction
-            (narrow-to-region beg end)
-            (goto-char (point-min))
-            (while (re-search-forward "^\\(\\*+\\) " nil t)
-              (let* ((stars (match-string 1))
-                     (current-level (length stars)))
-                (when (< current-level min-level)
-                  (replace-match
-                   (concat (make-string min-level ?*) " ")
-                   nil nil))))))))))
+          (setq base-depth
+                (condition-case nil
+                    (progn
+                      (goto-char (max (point-min) (1- beg)))
+                      (org-back-to-heading t)
+                      (org-current-level))
+                  (error nil))))
+        (when base-depth
+          (save-excursion
+            (save-restriction
+              (let ((beg-marker (copy-marker beg))
+                    (end-marker (copy-marker end t)))
+                (unwind-protect
+                    (progn
+                      (narrow-to-region beg-marker end-marker)
+                      (goto-char (point-min))
+                      ;; Repair malformed heading prefixes like "**/" -> "** ".
+                      (while (re-search-forward "^\\(\\*+\\)/[ \t]*" nil t)
+                        (replace-match (concat (match-string 1) " ") nil nil))
+
+                      (let (headings
+                            min-depth
+                            target-min
+                            delta
+                            saw-heading)
+                        (goto-char (point-min))
+                        (while (re-search-forward "^\\(\\*+\\)[ \t]" nil t)
+                          (let ((pos (match-beginning 0))
+                                (depth (length (match-string 1))))
+                            (setq saw-heading t)
+                            (push (cons pos depth) headings)
+                            (setq min-depth (if min-depth (min min-depth depth) depth))))
+
+                        (when saw-heading
+                          (setq target-min (max 4 (1+ base-depth))
+                                delta (max 0 (- target-min min-depth)))
+
+                          (setq headings (sort headings (lambda (a b) (> (car a) (car b)))))
+
+                          ;; Apply replacements from bottom to top to avoid stale positions.
+                          (dolist (h headings)
+                            (goto-char (car h))
+                            (when (looking-at "^\\(\\*+\\)\\([ \t]\\)")
+                              (let* ((old-depth (cdr h))
+                                     (new-depth (+ old-depth delta))
+                                     (new-prefix (concat (make-string new-depth ?*) (match-string 2))))
+                                (replace-match new-prefix nil nil))))
+
+                          (goto-char (point-min))
+                          (while (re-search-forward "^\\(\\*+\\)[ \t]" nil t)
+                            (let ((depth (length (match-string 1))))
+                              (when (< depth target-min)
+                                (error "Heading depth invariant violated in response region (target-min=%d, found=%d, line=%d)"
+                                       target-min
+                                       depth
+                                       (line-number-at-pos))))))))
+                  (set-marker beg-marker nil)
+                  (set-marker end-marker nil))))))))))
 
 ;;; ------------------------------------------------------------------
 ;;; Activation
@@ -433,9 +482,9 @@ are at least MIN-LEVEL deep."
   (add-hook 'gptel-pre-response-functions
             #'my/gptel-wrap-response)
 
-  ;; 2. Then demote headings
+  ;; 2. Then normalize headings
   (add-hook 'gptel-post-response-functions
-            #'my/gptel-demote-headings))
+            #'my/gptel-normalize-response-headings))
 
 (defun my/gptel-org-workflow-disable ()
   (interactive)
@@ -446,7 +495,7 @@ are at least MIN-LEVEL deep."
                #'my/gptel-wrap-response)
 
   (remove-hook 'gptel-post-response-functions
-               #'my/gptel-demote-headings))
+               #'my/gptel-normalize-response-headings))
 
 (provide 'my-gptel-org-workflow)
 ;;; my-gptel-org-workflow.el ends here
