@@ -380,20 +380,42 @@ use `gptel-send` (e.g. C-c RET) as usual."
                           (format-time-string "%Y-%m-%d %H:%M")))
           (insert "@assistant:\n\n"))))))
 
-(defun my/gptel-demote-headings (_response _info)
-  "Ensure assistant headings are level 4 or deeper.
+;; (defun my/gptel-demote-headings (_response _info)
+;;   "Ensure assistant headings are level 4 or deeper.
 
-This prevents the assistant from escaping the subtree."
+;; This prevents the assistant from escaping the subtree."
+;;   (when (derived-mode-p 'org-mode)
+;;     (save-excursion
+;;       (let ((min-level 4))
+;;         (goto-char (point-min))
+;;         (while (re-search-forward "^\\(\\*+\\) " nil t)
+;;           (let ((n (length (match-string 1))))
+;;             (when (< n min-level)
+;;               (replace-match
+;;                (concat (make-string min-level ?*) " ")
+;;                nil nil))))))))
+
+(defun my/gptel-demote-headings (_response info)
+  "Safely ensure assistant headings inside inserted response
+are at least MIN-LEVEL deep."
   (when (derived-mode-p 'org-mode)
-    (save-excursion
-      (let ((min-level 4))
-        (goto-char (point-min))
-        (while (re-search-forward "^\\(\\*+\\) " nil t)
-          (let ((n (length (match-string 1))))
-            (when (< n min-level)
-              (replace-match
-               (concat (make-string min-level ?*) " ")
-               nil nil))))))))
+    (let ((beg (plist-get info :beg))
+          (end (plist-get info :end))
+          (min-level 4))
+      (when (and (integer-or-marker-p beg)
+                 (integer-or-marker-p end)
+                 (< beg end))
+        (save-excursion
+          (save-restriction
+            (narrow-to-region beg end)
+            (goto-char (point-min))
+            (while (re-search-forward "^\\(\\*+\\) " nil t)
+              (let* ((stars (match-string 1))
+                     (current-level (length stars)))
+                (when (< current-level min-level)
+                  (replace-match
+                   (concat (make-string min-level ?*) " ")
+                   nil nil))))))))))
 
 ;;; ------------------------------------------------------------------
 ;;; Activation
