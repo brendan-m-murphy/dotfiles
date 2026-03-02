@@ -400,14 +400,14 @@ use `gptel-send` (e.g. C-c RET) as usual."
 
 This operates only on the inserted response region from INFO (:beg/:end)."
   (when (derived-mode-p 'org-mode)
-    (let ((beg (plist-get info :beg))
-          (end (plist-get info :end))
-          base-depth)
+    (let* ((beg (plist-get info :beg))
+           (end (plist-get info :end))
+           base-depth)
       (when (and (integer-or-marker-p beg)
                  (integer-or-marker-p end)
                  (< beg end))
         (save-excursion
-          (goto-char beg)
+          (goto-char (max (point-min) (1- beg)))
           (org-back-to-heading t)
           (setq base-depth (org-current-level)))
         (save-excursion
@@ -421,29 +421,36 @@ This operates only on the inserted response region from INFO (:beg/:end)."
             (let ((headings nil)
                   min-depth
                   target-min
-                  delta)
+                  delta
+                  saw-depth-one)
               (goto-char (point-min))
               (while (re-search-forward "^\\(\\*+\\)[ \t]" nil t)
                 (let ((pos (match-beginning 0))
                       (depth (length (match-string 1))))
                   (push (cons pos depth) headings)
+                  (when (= depth 1)
+                    (setq saw-depth-one t))
                   (setq min-depth (if min-depth (min min-depth depth) depth))))
 
               (when headings
                 (setq target-min (1+ base-depth)
                       delta (- target-min min-depth))
 
+                ;; `headings` is collected with `push`, so iteration runs bottom to top.
                 (dolist (h headings)
                   (goto-char (car h))
                   (when (looking-at "^\\(\\*+\\)\\([ \t]\\)")
-                    (let* ((new-depth (max (cdr h) (+ (cdr h) delta)))
+                    (let* ((old-depth (length (match-string 1)))
+                           (new-depth (max old-depth (+ old-depth delta)))
                            (new-prefix (concat (make-string new-depth ?*) (match-string 2))))
                       (replace-match new-prefix nil nil))))
 
                 (goto-char (point-min))
                 (while (re-search-forward "^\\(\\*+\\)[ \t]" nil t)
                   (when (< (length (match-string 1)) target-min)
-                    (error "Heading depth invariant violated in response region")))))))))))
+                    (error "Heading depth invariant violated in response region")))
+                (when saw-depth-one
+                  (error "Heading depth invariant violated in response region")))))))))))
 
 ;;; ------------------------------------------------------------------
 ;;; Activation
