@@ -415,7 +415,7 @@ This operates only on the inserted response region from INFO (:beg/:end)."
             (narrow-to-region beg end)
             (goto-char (point-min))
             ;; Repair malformed heading prefixes like "**/" -> "** ".
-            (while (re-search-forward "^\\(\\*+\\)/" nil t)
+            (while (re-search-forward "^\\(\\*+\\)/[ \t]*" nil t)
               (replace-match (concat (match-string 1) " ") nil nil))
 
             (let ((headings nil)
@@ -442,7 +442,7 @@ This operates only on the inserted response region from INFO (:beg/:end)."
 
                 (goto-char (point-min))
                 (while (re-search-forward "^\\(\\*+\\)[ \t]" nil t)
-                  (when (< (length (match-string 1)) 4)
+                  (when (< (length (match-string 1)) target-min)
                     (error "Heading depth invariant violated in response region")))))))))))
 
 ;;; ------------------------------------------------------------------
