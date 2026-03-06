@@ -362,21 +362,22 @@ use `gptel-send` (e.g. C-c RET) as usual."
 (defun my/gptel-wrap-response (_response info)
   "Insert a level-3 Response heading immediately before @assistant.
 
-INFO may carry response region bounds (as plist or alist)."
+INFO must carry response region bounds (plist or alist)."
   (when (derived-mode-p 'org-mode)
     (let* ((beg (or (plist-get info :beg)
                     (plist-get info :start)
                     (plist-get info :position)
                     (alist-get :beg info)
                     (alist-get :start info)
-                    (alist-get :position info)
-                    (point-min)))
+                    (alist-get :position info)))
            (end (or (plist-get info :end)
-                    (alist-get :end info)
-                    (point-max))))
+                    (alist-get :end info))))
+      ;; Never fall back to point-min/point-max; operate only on the current
+      ;; response region when explicit bounds are available.
       (when (and (integer-or-marker-p beg)
                  (integer-or-marker-p end)
-                 (< beg end))
+                 (< (if (markerp beg) (marker-position beg) beg)
+                    (if (markerp end) (marker-position end) end)))
         (save-excursion
           (save-restriction
             (narrow-to-region beg end)
