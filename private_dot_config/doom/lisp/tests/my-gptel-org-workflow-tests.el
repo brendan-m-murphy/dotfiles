@@ -297,9 +297,6 @@ assistant headings must still be clamped to depth >= 4."
            (end (point-max)))
       (my/gptel-normalize-response-headings beg end))
 
-    ;; Debug print
-    (message "%s" (buffer-string))
-
     ;; Outline must be depth 4
     (goto-char (point-min))
     (search-forward "Outline")
@@ -361,6 +358,10 @@ hello
       (goto-char (point-min))
       (while (re-search-forward "^@assistant\(?::\)?[ \t]*$" nil t)
         (setq count (1+ count)))
+      (message "expected assistant marker count: 1")
+      (message "actual assistant marker count: %d" count)
+      (message "actual buffer:
+%s" (buffer-string))
       (should (= count 1)))))
 
 (ert-deftest my/gptel-wrap-and-normalize-keep-response-heading-at-level-3 ()
@@ -383,8 +384,16 @@ hello
       (my/gptel-wrap-response nil (list :beg beg :end end))
       (my/gptel-normalize-response-headings beg end))
     (goto-char (point-min))
+    (message "expected response heading regex: ^\\*\\*\\* .* — Response$")
+    (message "actual buffer:
+%s" (buffer-string))
     (should (re-search-forward "^\*\*\* .* — Response$" nil t))
     (beginning-of-line)
+    (message "expected not to match: ^\\*\\*\\*\\* .* — Response$")
+    (message "actual response heading line: %s"
+             (buffer-substring-no-properties
+              (line-beginning-position)
+              (line-end-position)))
     (should-not (looking-at "^\*\*\*\* .* — Response$"))
     (forward-line 1)
     (should (looking-at "@assistant"))))
