@@ -155,5 +155,161 @@
              (regexp-quote "**** Outline\n**** Detail\n")
              (buffer-string)))))
 
+(ert-deftest my/gptel-base-depth-ignores-headings-inside-region ()
+  "Base depth must be computed from the nearest heading strictly before BEG,
+not from a heading inside the response region."
+  (with-temp-buffer
+    (org-mode)
+    (insert
+     "* Root\n"
+     "** Topic\n"
+     "*** Question\n"
+     "@assistant\n"
+     "*** Outline\n"      ;; This is INSIDE region and must NOT be used as base
+     "- item\n")
+
+    ;; Region starts at the Outline heading
+    (let* ((beg (save-excursion
+                  (goto-char (point-min))
+                  (search-forward "*** Outline")
+                  (match-beginning 0)))
+           (end (point-max)))
+      (my/gptel-normalize-response-headings beg end))
+
+    ;; After normalization, Outline must become depth 4, not 5
+    (goto-char (point-min))
+    (search-forward "Outline")
+    (beginning-of-line)
+    (should (looking-at "**** Outline"))))
+
+(ert-deftest my/gptel-normalize-response-headings-no-extra-indent ()
+  "Assistant headings should normalize to base-depth+1 (min 4),
+not deeper."
+  (with-temp-buffer
+    (org-mode)
+    (insert
+     "* Root\n"
+     "** Topic\n"
+     "*** Question\n"
+     "@assistant\n"
+     "*** Outline\n")
+
+    (let* ((beg (save-excursion
+                  (goto-char (point-min))
+                  (search-forward "*** Outline")
+                  (match-beginning 0)))
+           (end (point-max)))
+      (my/gptel-normalize-response-headings beg end))
+
+    (goto-char (point-min))
+    (search-forward "Outline")
+    (beginning-of-line)
+
+    ;; Must be exactly 4 stars
+    (should (looking-at "\\*\\{4\\} Outline"))
+    ;; Must NOT be 5
+    (should-not (looking-at "\\*\\{5\\} Outline"))))
+
+(ert-deftest my/gptel-normalize-response-headings-after-assistant-marker ()
+  "Ensure base depth detection works when region begins
+after an @assistant line."
+  (with-temp-buffer
+    (org-mode)
+    (insert
+     "* Root\n"
+     "** Topic\n"
+     "*** Question\n"
+     "@assistant\n\n"
+     "*** Outline\n")
+
+    (let* ((beg (save-excursion
+                  (goto-char (point-min))
+                  (search-forward "*** Outline")
+                  (match-beginning 0)))
+           (end (point-max)))
+      (my/gptel-normalize-response-headings beg end))
+
+    (goto-char (point-min))
+    (search-forward "Outline")
+    (beginning-of-line)
+
+    (should (looking-at "\\*\\{4\\} Outline"))))
+
+(ert-deftest my/gptel-base-depth-strictly-before-beg ()
+  "A heading starting exactly at BEG must not be used
+to compute base depth."
+  (with-temp-buffer
+    (org-mode)
+    (insert
+     "* Root\n"
+     "** Topic\n"
+     "*** Question\n"
+     "*** Outline\n") ;; region starts here
+
+    (let* ((beg (save-excursion
+                  (goto-char (point-min))
+                  (search-forward "*** Outline")
+                  (match-beginning 0)))
+           (end (point-max)))
+      (my/gptel-normalize-response-headings beg end))
+
+    (goto-char (point-min))
+    (search-forward "Outline")
+    (beginning-of-line)
+
+    ;; Must normalize relative to *** Question (depth 3)
+    ;; so target-min = 4
+    (should (looking-at "\\*\\{4\\} Outline"))))
+
+(ert-deftest my/gptel-normalize-response-headings-no-parent-enforces-minimum ()
+  "If no parent heading exists above region,
+assistant headings must still be clamped to depth >= 4."
+  (with-temp-buffer
+    (org-mode)
+    (insert "*** Outline\n")
+
+    (let ((beg (point-min))
+          (end (point-max)))
+      (my/gptel-normalize-response-headings beg end))
+
+    (goto-char (point-min))
+    (should (looking-at "\\*\\{4\\} Outline"))))
+
+(ert-deftest my/gptel-normalize-response-headings-realistic-conversation ()
+  "Simulate real conversation layout under topic and question."
+  (with-temp-buffer
+    (org-mode)
+    (insert
+     "* Root\n"
+     "** Topic\n"
+     "*** Question\n"
+     "@user\n"
+     "Prompt text\n\n"
+     "@assistant\n"
+     "*** Outline\n"
+     "**/ Broken\n")
+
+    ;; Region should start at first assistant heading
+    (let* ((beg (save-excursion
+                  (goto-char (point-min))
+                  (search-forward "*** Outline")
+                  (match-beginning 0)))
+           (end (point-max)))
+      (my/gptel-normalize-response-headings beg end))
+
+    ;; Debug print
+    (message "%s" (buffer-string))
+
+    ;; Outline must be depth 4
+    (goto-char (point-min))
+    (search-forward "Outline")
+    (beginning-of-line)
+    (should (looking-at "\\*\\{4\\} Outline"))
+
+    ;; Broken prefix repaired and clamped
+    (search-forward "Broken")
+    (beginning-of-line)
+    (should (looking-at "\\*\\{4\\} Broken"))))
+
 (provide 'my-gptel-org-workflow-tests)
 ;;; my-gptel-org-workflow-tests.el ends here

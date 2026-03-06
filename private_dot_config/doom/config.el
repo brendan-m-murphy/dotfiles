@@ -527,3 +527,195 @@
 ;;           (gptel-tools-setup)))
 ;;     (error
 ;;      (message "[gptel-tools] disabled due to error: %S" err))))
+
+
+
+;;; ---------------------------------------------------------------------------
+;;; Magit worktree helpers + Codex integration
+;;;
+;;; Assumptions
+;;; - main repo lives at:   ~/Documents/<repo>
+;;; - worktrees live at:    ~/Documents/<repo>-wt/<branch>
+;;; - Codex macOS app is installed and callable via: open -a Codex
+;;;
+;;; Commands provided:
+;;;
+;;; C-c g t   create a new task worktree (branch + magit)
+;;; C-c g c   create worktree and open it in Codex
+;;; C-c g o   open current directory in Codex
+;;;
+;;; ---------------------------------------------------------------------------
+
+;; (require 'magit)
+
+;; (defun my/repo-default-branch ()
+;;   "Return the repository default branch (origin/HEAD), fallback to 'main'."
+;;   (or
+;;    (magit-git-string "symbolic-ref" "--short" "refs/remotes/origin/HEAD")
+;;    "main"))
+
+;; (defun my/open-in-codex (&optional dir)
+;;   "Open DIR (or current directory) in the Codex macOS app."
+;;   (interactive)
+;;   (let ((path (or dir default-directory)))
+;;     (start-process "open-codex" nil "open" "-a" "Codex" path)
+;;     (message "Opening Codex in %s" path)))
+
+;; (defun my/magit-new-task-worktree (name &optional open-codex)
+;;   "Create worktree NAME under ../<repo>-wt/, create branch, and open Magit.
+
+;; If OPEN-CODEX is non-nil, also open the directory in the Codex app."
+;;   (interactive
+;;    (list
+;;     (read-string "Worktree / branch name: ")
+;;     current-prefix-arg))
+
+;;   (let* ((repo (magit-toplevel))
+;;          (repo-name (file-name-nondirectory (directory-file-name repo)))
+;;          (parent (file-name-directory (directory-file-name repo)))
+;;          (wt-root (expand-file-name (format "%s-wt" repo-name) parent))
+;;          (wt-dir (expand-file-name name wt-root))
+;;          (default-branch (my/repo-default-branch))
+;;          (default-directory repo))
+
+;;     (make-directory wt-root t)
+
+;;     (message "Creating worktree %s from %s..." name default-branch)
+
+;;     (magit-call-git
+;;      "worktree" "add"
+;;      "-b" name
+;;      wt-dir
+;;      default-branch)
+
+;;     ;; open Magit in the new worktree
+;;     (magit-status wt-dir)
+
+;;     ;; optionally open Codex
+;;     (when open-codex
+;;       (my/open-in-codex wt-dir))))
+
+;; (defun my/magit-new-worktree-and-codex (name)
+;;   "Create worktree NAME and open it in Codex."
+;;   (interactive "sWorktree / branch name: ")
+;;   (my/magit-new-task-worktree name t))
+
+;; ;; Keybindings
+;; (global-set-key (kbd "C-c g t") #'my/magit-new-task-worktree)
+;; (global-set-key (kbd "C-c g c") #'my/magit-new-worktree-and-codex)
+;; (global-set-key (kbd "C-c g o") #'my/open-in-codex)
+
+;;; ---------------------------------------------------------------------------
+;;; Magit worktree + uv helpers + Codex integration
+;;; ---------------------------------------------------------------------------
+
+(after! magit
+
+  (defun my/repo-default-branch ()
+    "Return repository default branch (origin HEAD) or fallback to 'main'."
+    (or
+     (let ((ref (magit-git-string "symbolic-ref" "--short" "refs/remotes/origin/HEAD")))
+       (when ref (string-remove-prefix "origin/" ref)))
+     "main"))
+
+  (defun my/open-in-codex (&optional dir)
+    "Open DIR (or current directory) in the Codex macOS app."
+    (interactive)
+    (let ((path (or dir default-directory)))
+      (start-process "open-codex" nil "open" "-a" "Codex" path)
+      (message "Opening Codex in %s" path)))
+
+  (defun my/uv-sync-here (&optional dir)
+    "Run `uv sync` in DIR (or current directory)."
+    (interactive)
+    (let ((path (or dir default-directory)))
+      (start-process
+       "uv-sync"
+       "*uv-sync*"
+       "bash" "-lc"
+       (format "cd %s && uv sync" (shell-quote-argument path)))
+      (message "Running uv sync in %s" path)))
+
+  (defun my/magit-new-task-worktree (name &optional open-codex)
+    "Create worktree NAME under ../<repo>-wt/, branch from default branch."
+    (interactive
+     (list
+      (read-string "Worktree / branch name: ")
+      current-prefix-arg))
+
+    (let* ((repo (magit-toplevel))
+           (repo-name (file-name-nondirectory (directory-file-name repo)))
+           (parent (file-name-directory (directory-file-name repo)))
+           (wt-root (expand-file-name (format "%s-wt" repo-name) parent))
+           (wt-dir (expand-file-name name wt-root))
+           (default-branch (my/repo-default-branch))
+           (default-directory repo))
+
+      (make-directory wt-root t)
+
+      (message "Creating worktree %s from %s..." name default-branch)
+
+      (magit-call-git
+       "worktree" "add"
+       "-b" name
+       wt-dir
+       default-branch)
+
+      ;; open Magit for new worktree
+      (magit-status wt-dir)
+
+      ;; optionally open Codex
+      (when open-codex
+        (my/open-in-codex wt-dir))))
+
+  (defun my/magit-new-worktree-and-codex (name)
+    "Create worktree NAME and open it in Codex."
+    (interactive "sWorktree / branch name: ")
+    (my/magit-new-task-worktree name t))
+
+  (defun my/magit-worktree-merged-p (branch)
+    "Return t if origin/BRANCH does not exist (i.e., branch deleted upstream)."
+    (not (magit-git-success
+          "ls-remote" "--exit-code" "--heads" "origin" branch)))
+
+  (defun my/magit-cleanup-worktree ()
+    "Remove the current worktree and delete its local branch if the remote branch is gone."
+    (interactive)
+    (let* ((branch (magit-get-current-branch))
+           (dir default-directory)
+           (repo (magit-toplevel))
+           (default-directory repo))
+
+      (unless branch
+        (user-error "Not on a branch"))
+
+      ;; refresh remote state
+      (magit-call-git "fetch" "origin")
+
+      (if (my/magit-worktree-merged-p branch)
+          (when (yes-or-no-p
+                 (format "Remote branch '%s' deleted. Remove worktree and local branch? " branch))
+
+            ;; remove worktree
+            (magit-call-git "worktree" "remove" "--force" dir)
+
+            ;; delete local branch
+            (magit-call-git "branch" "-D" branch)
+
+            ;; clean stale metadata
+            (magit-call-git "worktree" "prune")
+
+            (message "Cleaned up worktree and branch %s" branch))
+
+        (message
+         "Remote branch origin/%s still exists — PR may not be merged yet." branch)))))
+
+;; Keybindings
+
+(map! :leader
+      (:prefix ("g" . "git")
+       :desc "Create worktree" "t" #'my/magit-new-task-worktree
+       :desc "Create worktree + Codex" "c" #'my/magit-new-worktree-and-codex
+       :desc "Run uv sync" "v" #'my/uv-sync-here
+       :desc "Open in Codex" "o" #'my/open-in-codex
+       :desc "Cleanup merged worktree" "x" #'my/magit-cleanup-worktree))
