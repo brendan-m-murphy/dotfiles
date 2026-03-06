@@ -375,25 +375,95 @@
                       (shell-quote-argument user-login-name)))))))
 
 ;; custom OpenAI backend object with more recent model list (as of 26 Jan 2026)
+;; --------------------------------------------------------------------
+;; gptel / OpenAI configuration
+;; --------------------------------------------------------------------
+
+;; Backend with explicit model allow-list (required until gptel updates)
 (after! gptel
-  ;; Define an explicit OpenAI API backend whose model allowlist includes gpt-5.2.
-  ;; This avoids mutating internal backend structs (which may not have setf accessors).
   (setq gptel-backend
-        (gptel-make-openai "OpenAI API"
-          :key #'my/openai-api-key
-          :models '(gpt-5.2
-                    gpt-5.1 gpt-5 gpt-5-mini gpt-5-nano
-                    gpt-4.1 gpt-4.1-mini gpt-4.1-nano
-                    gpt-4o gpt-4o-mini
-                    o1 o1-mini o3 o3-mini o4-mini
-                    gpt-4-turbo gpt-4 gpt-3.5-turbo)))
+        (gptel-make-openai
+         "OpenAI"
+         :key #'my/openai-api-key
+         :models '(gpt-5.4
+                   gpt-5.4-pro
+                   gpt-5.3
+                   gpt-5.2
+                   gpt-5.1
+                   gpt-5
+                   gpt-5-mini
+                   gpt-5-nano
+                   gpt-4.1
+                   gpt-4.1-mini
+                   gpt-4.1-nano
+                   o3
+                   o3-pro
+                   o4-mini)))
 
-  (setq gptel-model 'gpt-5.2))
+  ;; Default model (good general-purpose default)
+  (setq gptel-model 'gpt-5-mini))
+
+
+;; --------------------------------------------------------------------
+;; Model profiles (easy switching)
+;; --------------------------------------------------------------------
+
+(defvar my/gptel-model-profiles
+  '((best       . gpt-5.4)
+    (best+      . gpt-5.4-pro)
+    (reasoning  . o3)
+    (reasoning+ . o3-pro)
+    (fast       . gpt-5-mini)
+    (cheap      . gpt-5-nano))
+  "Convenient aliases for gptel models.")
+
+(defun my/gptel-set-profile (profile)
+  "Switch gptel to PROFILE."
+  (interactive
+   (list
+    (intern
+     (completing-read
+      "LLM profile: "
+      (mapcar #'car my/gptel-model-profiles)))))
+  (setq gptel-model (alist-get profile my/gptel-model-profiles))
+  (message "gptel model → %s" gptel-model))
+
+
+;; Doom keybindings
+(map! :leader
+      (:prefix ("l" . "llm")
+       :desc "LLM best"        "b" (cmd! (my/gptel-set-profile 'best))
+       :desc "LLM best+"       "B" (cmd! (my/gptel-set-profile 'best+))
+       :desc "LLM reasoning"   "r" (cmd! (my/gptel-set-profile 'reasoning))
+       :desc "LLM reasoning+"  "R" (cmd! (my/gptel-set-profile 'reasoning+))
+       :desc "LLM fast"        "f" (cmd! (my/gptel-set-profile 'fast))
+       :desc "LLM cheap"       "c" (cmd! (my/gptel-set-profile 'cheap))))
+
+
+;; --------------------------------------------------------------------
+;; Optional: model metadata so gptel-menu shows capability descriptions
+;; --------------------------------------------------------------------
 
 (after! gptel
-  ;; (setq! gptel-api-key #'my/openai-api-key
-  ;;        gptel-model 'gpt-5.2)
+  (dolist (model
+           '((gpt-5.4
+              :description "Frontier GPT-5 model"
+              :capabilities (text code tools vision))
+             (gpt-5.4-pro
+              :description "High-compute GPT-5 model"
+              :capabilities (text code tools vision reasoning))
+             (gpt-5-mini
+              :description "Fast GPT-5 small model"
+              :capabilities (text code tools))
+             (gpt-5-nano
+              :description "Ultra-cheap GPT-5 nano model"
+              :capabilities (text))
+             (o3
+              :description "Reasoning-optimised model"
+              :capabilities (text code reasoning tools))))
+    (add-to-list 'gptel-models model)))
 
+(after! gptel
   (setq!       gptel-default-mode 'org-mode)
 
   ;; org-mode prompt/response prefixes
@@ -432,7 +502,7 @@
                  "Retrieval policy (strict):
 - Do NOT read entire files by default.
 - First use: glob → grep (-n) to identify the minimum relevant locations.
-- Only extract small snippets around matches (±30 lines). Prefer head/tail.
+- Only extract small snippets around matches (±30 lines). Prefer read_range or head/tail.
 - Prefer summaries/indices over raw logs/CSVs; never ingest large tables wholesale.
 - If you must read a file, justify why and keep it to the smallest necessary region.
 - Always cite evidence as file:line-range.")))
@@ -511,99 +581,6 @@
   (macher-install)
   (macher-enable))
 
-
-;; ;;; gptel tools (local dev)
-;; (let ((gptel-tools-dir (expand-file-name "~/Documents/gptel-tools")))
-;;   (when (file-directory-p gptel-tools-dir)
-;;     (add-to-list 'load-path gptel-tools-dir)))
-
-;; ;; Do not hard-fail startup/doom doctor if local dev code is broken or API changed.
-;; (with-eval-after-load 'gptel
-;;   (condition-case err
-;;       (progn
-;;         (require 'gptel-tools nil 'noerror)
-;;         ;; Call setup only if it exists (your code may be mid-refactor).
-;;         (when (fboundp 'gptel-tools-setup)
-;;           (gptel-tools-setup)))
-;;     (error
-;;      (message "[gptel-tools] disabled due to error: %S" err))))
-
-
-
-;;; ---------------------------------------------------------------------------
-;;; Magit worktree helpers + Codex integration
-;;;
-;;; Assumptions
-;;; - main repo lives at:   ~/Documents/<repo>
-;;; - worktrees live at:    ~/Documents/<repo>-wt/<branch>
-;;; - Codex macOS app is installed and callable via: open -a Codex
-;;;
-;;; Commands provided:
-;;;
-;;; C-c g t   create a new task worktree (branch + magit)
-;;; C-c g c   create worktree and open it in Codex
-;;; C-c g o   open current directory in Codex
-;;;
-;;; ---------------------------------------------------------------------------
-
-;; (require 'magit)
-
-;; (defun my/repo-default-branch ()
-;;   "Return the repository default branch (origin/HEAD), fallback to 'main'."
-;;   (or
-;;    (magit-git-string "symbolic-ref" "--short" "refs/remotes/origin/HEAD")
-;;    "main"))
-
-;; (defun my/open-in-codex (&optional dir)
-;;   "Open DIR (or current directory) in the Codex macOS app."
-;;   (interactive)
-;;   (let ((path (or dir default-directory)))
-;;     (start-process "open-codex" nil "open" "-a" "Codex" path)
-;;     (message "Opening Codex in %s" path)))
-
-;; (defun my/magit-new-task-worktree (name &optional open-codex)
-;;   "Create worktree NAME under ../<repo>-wt/, create branch, and open Magit.
-
-;; If OPEN-CODEX is non-nil, also open the directory in the Codex app."
-;;   (interactive
-;;    (list
-;;     (read-string "Worktree / branch name: ")
-;;     current-prefix-arg))
-
-;;   (let* ((repo (magit-toplevel))
-;;          (repo-name (file-name-nondirectory (directory-file-name repo)))
-;;          (parent (file-name-directory (directory-file-name repo)))
-;;          (wt-root (expand-file-name (format "%s-wt" repo-name) parent))
-;;          (wt-dir (expand-file-name name wt-root))
-;;          (default-branch (my/repo-default-branch))
-;;          (default-directory repo))
-
-;;     (make-directory wt-root t)
-
-;;     (message "Creating worktree %s from %s..." name default-branch)
-
-;;     (magit-call-git
-;;      "worktree" "add"
-;;      "-b" name
-;;      wt-dir
-;;      default-branch)
-
-;;     ;; open Magit in the new worktree
-;;     (magit-status wt-dir)
-
-;;     ;; optionally open Codex
-;;     (when open-codex
-;;       (my/open-in-codex wt-dir))))
-
-;; (defun my/magit-new-worktree-and-codex (name)
-;;   "Create worktree NAME and open it in Codex."
-;;   (interactive "sWorktree / branch name: ")
-;;   (my/magit-new-task-worktree name t))
-
-;; ;; Keybindings
-;; (global-set-key (kbd "C-c g t") #'my/magit-new-task-worktree)
-;; (global-set-key (kbd "C-c g c") #'my/magit-new-worktree-and-codex)
-;; (global-set-key (kbd "C-c g o") #'my/open-in-codex)
 
 ;;; ---------------------------------------------------------------------------
 ;;; Magit worktree + uv helpers + Codex integration
