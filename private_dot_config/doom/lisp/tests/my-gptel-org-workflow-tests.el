@@ -311,5 +311,83 @@ assistant headings must still be clamped to depth >= 4."
     (beginning-of-line)
     (should (looking-at "\\*\\{4\\} Broken"))))
 
+
+(ert-deftest my/gptel-wrap-response-inserts-response-heading-before-assistant ()
+  "Wrap inserts a level-3 Response heading immediately before @assistant."
+  (my/gptel-test--with-org-buffer
+      "*** 2026-03-06 — Question
+@user
+hello
+
+@assistant
+hello
+"
+    (let ((beg (save-excursion
+                 (goto-char (point-min))
+                 (search-forward "@assistant")
+                 (line-beginning-position)))
+          (end (point-max)))
+      (my/gptel-wrap-response nil (list :beg beg :end end)))
+    (should (string-match-p
+             (regexp-quote
+              "*** 2026-03-06 — Question
+@user
+hello
+
+*** ")
+             (buffer-string)))
+    (goto-char (point-min))
+    (search-forward "— Response")
+    (forward-line 1)
+    (should (looking-at "@assistant"))))
+
+(ert-deftest my/gptel-wrap-response-does-not-add-extra-assistant-marker ()
+  "Wrap should keep exactly one @assistant marker in the wrapped region."
+  (my/gptel-test--with-org-buffer
+      "*** 2026-03-06 — Question
+@user
+hello
+
+@assistant
+hello
+"
+    (let ((beg (save-excursion
+                 (goto-char (point-min))
+                 (search-forward "@assistant")
+                 (line-beginning-position)))
+          (end (point-max)))
+      (my/gptel-wrap-response nil (list :beg beg :end end)))
+    (let ((count 0))
+      (goto-char (point-min))
+      (while (re-search-forward "^@assistant\(?::\)?[ \t]*$" nil t)
+        (setq count (1+ count)))
+      (should (= count 1)))))
+
+(ert-deftest my/gptel-wrap-and-normalize-keep-response-heading-at-level-3 ()
+  "Response heading inserted by wrap must not be normalized down to level 4."
+  (my/gptel-test--with-org-buffer
+      "* Root
+** Topic
+*** 2026-03-06 — Question
+@user
+hello
+
+@assistant
+*** Outline
+"
+    (let* ((beg (save-excursion
+                  (goto-char (point-min))
+                  (search-forward "@assistant")
+                  (line-beginning-position)))
+           (end (point-max)))
+      (my/gptel-wrap-response nil (list :beg beg :end end))
+      (my/gptel-normalize-response-headings beg end))
+    (goto-char (point-min))
+    (should (re-search-forward "^\*\*\* .* — Response$" nil t))
+    (beginning-of-line)
+    (should-not (looking-at "^\*\*\*\* .* — Response$"))
+    (forward-line 1)
+    (should (looking-at "@assistant"))))
+
 (provide 'my-gptel-org-workflow-tests)
 ;;; my-gptel-org-workflow-tests.el ends here
