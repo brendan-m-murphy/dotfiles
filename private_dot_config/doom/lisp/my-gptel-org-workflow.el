@@ -359,18 +359,35 @@ use `gptel-send` (e.g. C-c RET) as usual."
         (org-end-of-subtree t t)
         (insert "\n*** Conversation\n"))))))
 
-(defun my/gptel-wrap-response (_response _info)
-  "Insert a level-3 Response heading immediately before @assistant."
-  ;; debugging message
-  (message "wrap-response called: point=%s buffer=%s"
-         (point) (current-buffer))
+(defun my/gptel-wrap-response (_response info)
+  "Insert a level-3 Response heading immediately before @assistant.
+
+INFO may carry response region bounds (as plist or alist)."
   (when (derived-mode-p 'org-mode)
-    (save-excursion
-      (goto-char (point-min))
-      (when (re-search-forward "^@assistant" nil t)
-        (beginning-of-line)
-        (insert (format "*** %s — Response\n"
-                        (format-time-string "%Y-%m-%d %H:%M")))))))
+    (let* ((beg (or (plist-get info :beg)
+                    (plist-get info :start)
+                    (plist-get info :position)
+                    (alist-get :beg info)
+                    (alist-get :start info)
+                    (alist-get :position info)
+                    (point-min)))
+           (end (or (plist-get info :end)
+                    (alist-get :end info)
+                    (point-max))))
+      (when (and (integer-or-marker-p beg)
+                 (integer-or-marker-p end)
+                 (< beg end))
+        (save-excursion
+          (save-restriction
+            (narrow-to-region beg end)
+            (goto-char (point-min))
+            (when (re-search-forward "^@assistant\\(?::\\)?[ \t]*$" nil t)
+              (beginning-of-line)
+              (unless (save-excursion
+                        (forward-line -1)
+                        (looking-at "^\\*\\*\\* .+ — Response[ \t]*$"))
+                (insert (format "*** %s — Response\n"
+                                (format-time-string "%Y-%m-%d %H:%M")))))))))))
 
 (defun my/gptel-normalize-response-headings (beg end)
   "Normalize assistant response headings relative to containing heading.
