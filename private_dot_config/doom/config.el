@@ -462,8 +462,11 @@
             (copy-alist gptel-response-prefix-alist)
           nil))
 
-  (setf (alist-get 'org-mode gptel-prompt-prefix-alist) "@user\n"
-        (alist-get 'org-mode gptel-response-prefix-alist) "@assistant\n")
+  (setf (alist-get 'org-mode gptel-prompt-prefix-alist)
+        "*** Prompt\n@user\n"
+
+        (alist-get 'org-mode gptel-response-prefix-alist)
+        "*** Response\n@assistant\n")
 
   ;; Enable gptel's optional convenience integrations, including MCP helpers.
   (require 'gptel-integrations)
