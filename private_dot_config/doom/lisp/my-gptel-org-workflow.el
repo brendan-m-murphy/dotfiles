@@ -423,32 +423,35 @@ This operates only on the inserted response region from BEG to END."
                         (replace-match (concat (match-string 1) " ") nil nil))
 
                       (let (headings
-                            min-depth
+                            first-depth
                             target-min
                             delta
                             saw-heading)
                         (goto-char (point-min))
-                        (while (re-search-forward "^\\(\\*+\\)[ \t]" nil t)
+                        (while (re-search-forward "^\\(\\*+\\)[ \\t]" nil t)
                           (let ((pos (match-beginning 0))
                                 (depth (length (match-string 1))))
+                            (unless saw-heading
+                              (setq first-depth depth))
                             (setq saw-heading t)
-                            (push (cons pos depth) headings)
-                            (setq min-depth (if min-depth (min min-depth depth) depth))))
+                            (push (cons pos depth) headings)))
 
                         (when saw-heading
+                          ;; Anchor relative indentation to the first response heading,
+                          ;; then clamp every heading to at least target-min.
                           (setq target-min (max 4 (1+ base-depth))
-                                delta (max 0 (- target-min min-depth)))
+                                delta (max 0 (- target-min first-depth)))
 
                           (setq headings (sort headings (lambda (a b) (> (car a) (car b)))))
 
                           ;; Apply replacements from bottom to top to avoid stale positions.
                           (dolist (h headings)
                             (goto-char (car h))
-                            (when (looking-at "^\\(\\*+\\)\\([ \t]\\)")
+                            (when (looking-at "^\\(\\*+\\)\\([ \\t]\\)")
                               (let* ((old-depth (cdr h))
-                                     (new-depth (+ old-depth delta))
+                                     (new-depth (max target-min (+ old-depth delta)))
                                      (new-prefix (concat (make-string new-depth ?*) (match-string 2))))
-                                (replace-match new-prefix nil nil))))
+                                (replace-match new-prefix nil nil)))))
 
                           (goto-char (point-min))
                           (while (re-search-forward "^\\(\\*+\\)[ \t]" nil t)
