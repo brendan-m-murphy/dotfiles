@@ -416,54 +416,63 @@ This operates only on the inserted response region from BEG to END."
                     (progn
                       (narrow-to-region beg-marker end-marker)
                       (goto-char (point-min))
-                      ;; skip @assistant
-                      (when (re-search-forward "^@assistant" nil t)
-                        (forward-line 1))
-                      ;; Repair malformed heading prefixes like "**/" -> "** ".
-                      (while (re-search-forward "^\\(\\*+\\)/[ \t]*" nil t)
-                        (replace-match (concat (match-string 1) " ") nil nil))
 
-                      (let (headings
-                            first-depth
-                            target-min
-                            delta
-                            saw-heading)
-                        (goto-char (point-min))
-                        (while (re-search-forward "^\\(\\*+\\)[ \t]" nil t)
-                          (let ((pos (match-beginning 0))
-                                (depth (length (match-string 1))))
-                            (unless saw-heading
-                              (setq first-depth depth))
-                            (setq saw-heading t)
-                            (push (cons pos depth) headings)))
+                      ;; Only normalize assistant *content* headings (after @assistant),
+                      ;; leaving any wrapper heading before @assistant untouched.
+                      (let ((content-start (point-min-marker)))
+                        (when (re-search-forward "^@assistant" nil t)
+                          (forward-line 1)
+                          (set-marker content-start (point)))
 
-                        (when saw-heading
-                          ;; Anchor relative indentation to the first response heading,
-                          ;; then clamp every heading to at least target-min.
-                          (setq target-min (max 4 (1+ base-depth))
-                                delta (max 0 (- target-min first-depth)))
+                        ;; Repair malformed heading prefixes like "**/" -> "** ".
+                        (goto-char content-start)
+                        (while (re-search-forward "^\\(\\*+\\)/[ \t]*" nil t)
+                          (replace-match (concat (match-string 1) " ") nil nil))
 
-                          (setq headings (sort headings (lambda (a b) (> (car a) (car b)))))
-
-                          ;; Apply replacements from bottom to top to avoid stale positions.
-                          (dolist (h headings)
-                            (goto-char (car h))
-                            (when (looking-at "^\\(\\*+\\)\\([ \t]\\)")
-                              (let* ((old-depth (cdr h))
-                                     (new-depth (max target-min (+ old-depth delta)))
-                                     (new-prefix (concat (make-string new-depth ?*) (match-string 2))))
-                                (replace-match new-prefix nil nil))))
-
-                          (goto-char (point-min))
+                        (let (headings
+                              first-depth
+                              target-min
+                              delta
+                              saw-heading)
+                          (goto-char content-start)
                           (while (re-search-forward "^\\(\\*+\\)[ \t]" nil t)
-                            (let ((depth (length (match-string 1))))
-                              (when (< depth target-min)
-                                (error "Heading depth invariant violated in response region (target-min=%d, found=%d, line=%d)"
-                                       target-min
-                                       depth
-                                       (line-number-at-pos))))))))
+                            (let ((pos (match-beginning 0))
+                                  (depth (length (match-string 1))))
+                              (unless saw-heading
+                                (setq first-depth depth))
+                              (setq saw-heading t)
+                              (push (cons pos depth) headings)))
+
+                          (when saw-heading
+                            ;; Anchor relative indentation to the first response heading,
+                            ;; then clamp every heading to at least target-min.
+                            (setq target-min (max 4 (1+ base-depth))
+                                  delta (max 0 (- target-min first-depth)))
+
+                            (setq headings (sort headings (lambda (a b) (> (car a) (car b)))))
+
+                            ;; Apply replacements from bottom to top to avoid stale positions.
+                            (dolist (h headings)
+                              (goto-char (car h))
+                              (when (looking-at "^\\(\\*+\\)\\([ \t]\\)")
+                                (let* ((old-depth (cdr h))
+                                       (new-depth (max target-min (+ old-depth delta)))
+                                       (new-prefix (concat (make-string new-depth ?*) (match-string 2))))
+                                  (replace-match new-prefix nil nil))))
+
+                            (goto-char content-start)
+                            (while (re-search-forward "^\\(\\*+\\)[ \t]" nil t)
+                              (let ((depth (length (match-string 1))))
+                                (when (< depth target-min)
+                                  (error "Heading depth invariant violated in response region (target-min=%d, found=%d, line=%d)"
+                                         target-min
+                                         depth
+                                         (line-number-at-pos))))))
+
+                          (set-marker content-start nil))))
                   (set-marker beg-marker nil)
                   (set-marker end-marker nil))))))))))
+
 
 ;;; ------------------------------------------------------------------
 ;;; Activation
