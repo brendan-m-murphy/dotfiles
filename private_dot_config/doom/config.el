@@ -261,6 +261,20 @@
 
 ;; MAGIT
 
+(defun my/gh-current-pr-comments-to-kill-ring ()
+  "Fetch unresolved review comments for the current PR and copy to kill ring."
+  (interactive)
+  (let* ((pr (string-trim
+              (shell-command-to-string
+               "gh pr view --json number --jq .number 2>/dev/null")))
+         (cmd (format "gh-pr-comments-for-llm %s" pr))
+         (output (shell-command-to-string cmd)))
+    (if (string-empty-p pr)
+        (user-error "No PR associated with current branch")
+      (kill-new output)
+      (message "Copied unresolved PR comments to kill ring (%d chars)"
+               (length output)))))
+
 ;; SMERGE
 (defun smerge-repeatedly ()
   "Perform smerge actions again and again"
@@ -374,33 +388,27 @@
               (format "security find-generic-password -a %s -s openai-api-key -w"
                       (shell-quote-argument user-login-name)))))))
 
-;; custom OpenAI backend object with more recent model list (as of 26 Jan 2026)
 ;; --------------------------------------------------------------------
 ;; gptel / OpenAI configuration
 ;; --------------------------------------------------------------------
 
-;; Backend with explicit model allow-list (required until gptel updates)
 (after! gptel
+  ;; Backend with explicit model allow-list
+  ;; (required until gptel updates its internal model list)
   (setq gptel-backend
         (gptel-make-openai
          "OpenAI"
          :key #'my/openai-api-key
          :models '(gpt-5.4
                    gpt-5.4-pro
-                   gpt-5.3
                    gpt-5.2
-                   gpt-5.1
-                   gpt-5
                    gpt-5-mini
                    gpt-5-nano
-                   gpt-4.1
-                   gpt-4.1-mini
-                   gpt-4.1-nano
                    o3
                    o3-pro
                    o4-mini)))
 
-  ;; Default model (good general-purpose default)
+  ;; Default model
   (setq gptel-model 'gpt-5-mini))
 
 
@@ -416,6 +424,7 @@
     (fast       . gpt-5-mini)
     (cheap      . gpt-5-nano))
   "Convenient aliases for gptel models.")
+
 
 (defun my/gptel-set-profile (profile)
   "Switch gptel to PROFILE."
@@ -438,30 +447,6 @@
        :desc "LLM reasoning+"  "R" (cmd! (my/gptel-set-profile 'reasoning+))
        :desc "LLM fast"        "f" (cmd! (my/gptel-set-profile 'fast))
        :desc "LLM cheap"       "c" (cmd! (my/gptel-set-profile 'cheap))))
-
-
-;; --------------------------------------------------------------------
-;; Optional: model metadata so gptel-menu shows capability descriptions
-;; --------------------------------------------------------------------
-
-(after! gptel
-  (dolist (model
-           '((gpt-5.4
-              :description "Frontier GPT-5 model"
-              :capabilities (text code tools vision))
-             (gpt-5.4-pro
-              :description "High-compute GPT-5 model"
-              :capabilities (text code tools vision reasoning))
-             (gpt-5-mini
-              :description "Fast GPT-5 small model"
-              :capabilities (text code tools))
-             (gpt-5-nano
-              :description "Ultra-cheap GPT-5 nano model"
-              :capabilities (text))
-             (o3
-              :description "Reasoning-optimised model"
-              :capabilities (text code reasoning tools))))
-    (add-to-list 'gptel-models model)))
 
 (after! gptel
   (setq!       gptel-default-mode 'org-mode)

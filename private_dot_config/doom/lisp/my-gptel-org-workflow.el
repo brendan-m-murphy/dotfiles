@@ -267,32 +267,6 @@ With prefix arg (C-u), prompt for a file."
 ;;; Create New Topic Header
 ;;; ------------------------------------------------------------------
 
-;; (defun my/gptel-new-topic (title)
-;;   "Create a new level-2 Topic heading as a sibling of the current topic."
-;;   (interactive "sTopic title: ")
-;;   (unless (derived-mode-p 'org-mode)
-;;     (user-error "Not in Org mode"))
-
-;;   ;; Ensure we're at a heading
-;;   (org-back-to-heading t)
-
-;;   ;; Ensure we are inside a level-2 topic
-;;   (unless (= (org-current-level) 2)
-;;     (user-error "Point must be inside a level-2 Topic heading"))
-
-;;   ;; Move to end of this topic subtree
-;;   (org-end-of-subtree t t)
-
-;;   ;; Insert new sibling topic
-;;   (insert (format "\n** %s\n" title))
-;;   (insert ":PROPERTIES:\n:GPTEL_TOPIC: t\n:END:\n\n")
-
-;;   ;; Optional: first question entry
-;;   (insert (format "*** %s — Question\n"
-;;                   (format-time-string "%Y-%m-%d %H:%M")))
-;;   (insert "@user:\n\n")
-;;   (forward-line -1))
-
 (defun my/gptel--goto-current-topic ()
   "Move point to the current level-2 topic heading, if any.
 Returns non-nil if found."
@@ -364,36 +338,39 @@ use `gptel-send` (e.g. C-c RET) as usual."
 ;;; Response processing
 ;;; ------------------------------------------------------------------
 
-(defun my/gptel-wrap-response (response info)
-  "Wrap assistant RESPONSE inside a structured *** Response heading."
+(defun my/gptel-ensure-conversation-node ()
+  "Ensure point is inside a level-3 conversation node."
+  (when (derived-mode-p 'org-mode)
+    (let ((level (org-current-level)))
+      (cond
+       ;; already in conversation node
+       ((= level 3))
+
+       ;; inside topic → create conversation node
+       ((= level 2)
+        (org-end-of-subtree t t)
+        (insert "\n*** Conversation\n"))
+
+       ;; deeper inside previous response → escape and create new node
+       ((> level 3)
+        (org-back-to-heading t)
+        (while (> (org-current-level) 2)
+          (org-up-heading-safe))
+        (org-end-of-subtree t t)
+        (insert "\n*** Conversation\n"))))))
+
+(defun my/gptel-wrap-response (_response _info)
+  "Insert a level-3 Response heading immediately before @assistant."
+  ;; debugging message
+  (message "wrap-response called: point=%s buffer=%s"
+         (point) (current-buffer))
   (when (derived-mode-p 'org-mode)
     (save-excursion
-      ;; Move to end of the most recent *** entry
-      (org-back-to-heading t)
-      (let ((level (org-current-level)))
-        (when (= level 3)
-          ;; Move to end of that subtree
-          (org-end-of-subtree t t)
-
-          ;; Insert structured response heading
-          (insert (format "\n*** %s — Response\n"
-                          (format-time-string "%Y-%m-%d %H:%M")))
-          (insert "@assistant:\n\n"))))))
-
-;; (defun my/gptel-demote-headings (_response _info)
-;;   "Ensure assistant headings are level 4 or deeper.
-
-;; This prevents the assistant from escaping the subtree."
-;;   (when (derived-mode-p 'org-mode)
-;;     (save-excursion
-;;       (let ((min-level 4))
-;;         (goto-char (point-min))
-;;         (while (re-search-forward "^\\(\\*+\\) " nil t)
-;;           (let ((n (length (match-string 1))))
-;;             (when (< n min-level)
-;;               (replace-match
-;;                (concat (make-string min-level ?*) " ")
-;;                nil nil))))))))
+      (goto-char (point-min))
+      (when (re-search-forward "^@assistant" nil t)
+        (beginning-of-line)
+        (insert (format "*** %s — Response\n"
+                        (format-time-string "%Y-%m-%d %H:%M")))))))
 
 (defun my/gptel-normalize-response-headings (beg end)
   "Normalize assistant response headings relative to containing heading.
@@ -421,6 +398,9 @@ This operates only on the inserted response region from BEG to END."
                     (progn
                       (narrow-to-region beg-marker end-marker)
                       (goto-char (point-min))
+                      ;; skip @assistant
+                      (when (re-search-forward "^@assistant" nil t)
+                        (forward-line 1))
                       ;; Repair malformed heading prefixes like "**/" -> "** ".
                       (while (re-search-forward "^\\(\\*+\\)/[ \t]*" nil t)
                         (replace-match (concat (match-string 1) " ") nil nil))
