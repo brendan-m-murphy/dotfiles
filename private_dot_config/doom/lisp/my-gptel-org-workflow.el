@@ -429,7 +429,7 @@ This operates only on the inserted response region from BEG to END."
                             delta
                             saw-heading)
                         (goto-char (point-min))
-                        (while (re-search-forward "^\\(\\*+\\)[ \\t]" nil t)
+                        (while (re-search-forward "^\\(\\*+\\)[ \t]" nil t)
                           (let ((pos (match-beginning 0))
                                 (depth (length (match-string 1))))
                             (unless saw-heading
@@ -448,11 +448,11 @@ This operates only on the inserted response region from BEG to END."
                           ;; Apply replacements from bottom to top to avoid stale positions.
                           (dolist (h headings)
                             (goto-char (car h))
-                            (when (looking-at "^\\(\\*+\\)\\([ \\t]\\)")
+                            (when (looking-at "^\\(\\*+\\)\\([ \t]\\)")
                               (let* ((old-depth (cdr h))
                                      (new-depth (max target-min (+ old-depth delta)))
                                      (new-prefix (concat (make-string new-depth ?*) (match-string 2))))
-                                (replace-match new-prefix nil nil)))))
+                                (replace-match new-prefix nil nil))))
 
                           (goto-char (point-min))
                           (while (re-search-forward "^\\(\\*+\\)[ \t]" nil t)
