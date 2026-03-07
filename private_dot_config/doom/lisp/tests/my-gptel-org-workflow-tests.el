@@ -144,12 +144,12 @@ This is intended for use in the markdown to org stream converter."
       "*** Response\n@assistant\n* First\n\n*** Response\n@assistant\n* Second\n"
     (let* ((second-beg (save-excursion
                          (goto-char (point-min))
-                         (re-search-forward "^\*\*\* Response$" nil t 2)
+                         (re-search-forward "^\\*\\*\\* Response$" nil t 2)
                          (line-beginning-position)))
            (second-end (point-max)))
       (my/gptel-normalize-response-headings second-beg second-end)
-      (should (string-match-p "^\* First$" (buffer-string)))
-      (should (string-match-p "^\*\*\*\* Second$" (buffer-string))))))
+      (should (string-match-p "^\\* First$" (buffer-string)))
+      (should (string-match-p "^\\*\\*\\*\\* Second$" (buffer-string))))))
 
 (ert-deftest my/gptel-markdown-conversion-headings-then-normalize ()
   (let* ((md "## Title\n\n### Section\n")
@@ -157,8 +157,8 @@ This is intended for use in the markdown to org stream converter."
     (my/gptel-test--with-org-buffer
         (concat "*** Response\n@assistant\n" org)
       (my/gptel-normalize-response-headings (point-min) (point-max))
-      (should (string-match-p "^\*\*\*\* Title$" (buffer-string)))
-      (should (string-match-p "^\*\*\*\*\* Section$" (buffer-string))))))
+      (should (string-match-p "^\\*\\*\\*\\* Title$" (buffer-string)))
+      (should (string-match-p "^\\*\\*\\*\\*\\* Section$" (buffer-string))))))
 
 (ert-deftest my/gptel-markdown-conversion-fenced-code-with-language ()
   (let* ((md "```python\nprint(\"hi\")\n```\n")
@@ -189,7 +189,7 @@ This is intended for use in the markdown to org stream converter."
       (let ((before (buffer-string)))
         (my/gptel-normalize-response-headings (point-min) (point-max))
         (should (string-match-p "^- item" (buffer-string)))
-        (should-not (string-match-p "^\*\*\*\* item" (buffer-string)))
+        (should-not (string-match-p "^\\*\\*\\*\\* item" (buffer-string)))
         (should (equal before (buffer-string)))))))
 
 (ert-deftest my/gptel-markdown-conversion-emphasis-not-heading ()
@@ -200,7 +200,7 @@ This is intended for use in the markdown to org stream converter."
       (let ((before (buffer-string)))
         (my/gptel-normalize-response-headings (point-min) (point-max))
         (should (string-match-p "is this bold\\?" (buffer-string)))
-        (should-not (string-match-p "^\*\*\*\* is this bold" (buffer-string)))
+        (should-not (string-match-p "^\\*\\*\\*\\* is this bold" (buffer-string)))
         (should (equal before (buffer-string)))))))
 
 (provide 'my-gptel-org-workflow-tests)

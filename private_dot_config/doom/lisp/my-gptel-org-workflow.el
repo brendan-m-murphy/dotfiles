@@ -389,9 +389,10 @@ use `gptel-send` (e.g. C-c RET) as usual."
               (let ((delta (max 0 (- 4 min-depth))))
                 (when (> delta 0)
                   (goto-char content-start)
-                  (replace-regexp
-                   "^\\(\\*+\\)\\([ \t]\\)"
-                   (concat "\\1" (make-string delta ?*) "\\2")))))))))))
+                  (while (re-search-forward "^\\(\\*+\\)\\([ \t]\\)" nil t)
+                    (replace-match
+                     (concat (match-string 1) (make-string delta ?*) (match-string 2))
+                     t t)))))))))))
 
 
 ;;; ------------------------------------------------------------------
