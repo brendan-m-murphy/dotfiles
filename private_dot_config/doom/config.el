@@ -449,7 +449,8 @@
        :desc "LLM cheap"       "c" (cmd! (my/gptel-set-profile 'cheap))))
 
 (after! gptel
-  (setq!       gptel-default-mode 'org-mode)
+  (setq! gptel-default-mode 'org-mode)
+  (setq! gptel-log-level 'debug)
 
   ;; org-mode prompt/response prefixes
   ;; Ensure these are alists (and avoid mutating a shared constant)
