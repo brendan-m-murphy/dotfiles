@@ -359,7 +359,17 @@ use `gptel-send` (e.g. C-c RET) as usual."
         (insert "\n*** Conversation\n"))))))
 
 (defun my/gptel-normalize-response-headings (beg end)
-  "Normalize assistant response headings while preserving relative depth."
+  "Normalize Org headings in the assistant response between BEG and END.
+
+Narrow to the inserted response region from BEG to END, locate the
+`@assistant' marker to find where assistant content begins, then scan
+headings under that point.
+
+The shallowest heading found is promoted so that its level becomes 4
+(\"****\"), and all other headings are shifted by the same number of
+stars, preserving their relative depth. Headings that are already at
+level 4 or deeper are never demoted; if the minimum level is >= 4, the
+buffer is left unchanged."
   (when (and (derived-mode-p 'org-mode)
              (integer-or-marker-p beg)
              (integer-or-marker-p end)
