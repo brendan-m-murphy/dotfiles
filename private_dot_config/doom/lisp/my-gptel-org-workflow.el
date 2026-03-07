@@ -359,37 +359,39 @@ use `gptel-send` (e.g. C-c RET) as usual."
         (insert "\n*** Conversation\n"))))))
 
 (defun my/gptel-normalize-response-headings (beg end)
-  "Normalize assistant response headings while preserving relative depth.
-
-Only headings after @assistant inside BEG..END are adjusted."
+  "Normalize assistant response headings while preserving relative depth."
   (when (and (derived-mode-p 'org-mode)
              (integer-or-marker-p beg)
              (integer-or-marker-p end)
-             (< (if (markerp beg) (marker-position beg) beg)
-                (if (markerp end) (marker-position end) end)))
+             (< beg end))
     (save-excursion
       (save-restriction
         (narrow-to-region beg end)
         (goto-char (point-min))
-        (when (re-search-forward "^@assistant\(?::\)?[ \t]*$" nil t)
+
+        ;; locate assistant marker
+        (when (re-search-forward "^@assistant\\(?::\\)?[ \t]*$" nil t)
           (forward-line 1)
+
+          ;; pass 1: find shallowest heading
           (let ((content-start (point))
                 min-depth)
             (save-excursion
               (goto-char content-start)
-              (while (re-search-forward "^\(\*+\)[ \t]" nil t)
+              (while (re-search-forward "^\\(\\*+\\)[ \t]" nil t)
                 (let ((depth (length (match-string 1))))
-                  (setq min-depth (if min-depth (min min-depth depth) depth)))))
+                  (setq min-depth (if min-depth
+                                      (min min-depth depth)
+                                    depth)))))
+
+            ;; pass 2: apply normalization
             (when min-depth
               (let ((delta (max 0 (- 4 min-depth))))
                 (when (> delta 0)
                   (goto-char content-start)
-                  (while (re-search-forward "^\(\*+\)\([ \t]\)" nil t)
-                    (replace-match
-                     (concat (match-string 1)
-                             (make-string delta ?*)
-                             (match-string 2))
-                     t t)))))))))))
+                  (replace-regexp
+                   "^\\(\\*+\\)\\([ \t]\\)"
+                   (concat "\\1" (make-string delta ?*) "\\2")))))))))))
 
 
 ;;; ------------------------------------------------------------------

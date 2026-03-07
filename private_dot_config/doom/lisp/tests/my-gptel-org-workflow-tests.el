@@ -22,19 +22,38 @@
   ;; Lightweight fallback used only when gptel is unavailable in test env.
   ;; CI with real gptel will use the real converter.
   (defun gptel--convert-markdown->org (md)
-    (let ((s md))
-      (setq s (replace-regexp-in-string
-               "```\\([[:alnum:]_+-]+\\)\\n\\([\\s\\S]*?\\)```"
-               "#+begin_src \\1\n\\2#+end_src"
-               s))
-      (setq s (replace-regexp-in-string
-               "```\\n\\([\\s\\S]*?\\)```"
-               "#+begin_example\n\\1#+end_example"
-               s))
-      (setq s (replace-regexp-in-string "^### " "*** " s))
-      (setq s (replace-regexp-in-string "^## " "** " s))
-      (setq s (replace-regexp-in-string "^- " "- " s))
-      s)))
+    (with-temp-buffer
+      (insert md)
+      (goto-char (point-min))
+      (let ((in-fence nil)
+            (fence-lang nil))
+        (while (not (eobp))
+          (beginning-of-line)
+          (cond
+           ((and (not in-fence)
+                 (looking-at "^```\\([[:alnum:]_+-]+\\)?[ \t]*$"))
+            (setq in-fence t
+                  fence-lang (match-string 1))
+            (replace-match (if fence-lang
+                               (format "#+begin_src %s" fence-lang)
+                             "#+begin_example")
+                           t t)
+            (forward-line 1))
+           ((and in-fence (looking-at "^```[ \t]*$"))
+            (setq in-fence nil)
+            (replace-match (if fence-lang "#+end_src" "#+end_example") t t)
+            (setq fence-lang nil)
+            (forward-line 1))
+           ((and (not in-fence) (looking-at "^### "))
+            (replace-match "*** " t t)
+            (forward-line 1))
+           ((and (not in-fence) (looking-at "^## "))
+            (replace-match "** " t t)
+            (forward-line 1))
+           (t
+            (forward-line 1)))))
+      (buffer-string))))
+
 
 (ert-deftest my/gptel-normalize-response-headings-preserves-relative-depth ()
   (my/gptel-test--with-org-buffer
