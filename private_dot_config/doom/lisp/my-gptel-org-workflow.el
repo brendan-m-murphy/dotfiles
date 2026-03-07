@@ -59,29 +59,28 @@ These must be defined in `my-gptel-tools.el`."
                     default-directory)))
     (string-join
      (list
-      "You are operating inside Emacs Org mode."
+      "Output strictly valid GitHub-Flavored Markdown."
       ""
-      "Org formatting rules:"
-      ;; "- Only create headings at level 4 or deeper."
-      ;; "- Never create level 2 or 3 headings."
-      "- Use ~ for inline code; do not use = (verbatim)."
-      "- Use #+begin_src blocks for multi-line code."
-      "- Never emit Markdown."
-      "- Do not escape the current subtree."
+      "Markdown output rules:"
+      "- Use # headings only."
+      "- Never emit org-mode syntax."
+      "- Never emit level-1 headings (#)."
+      "- Always leave a blank line after headings."
+      "- Use fenced code blocks with language tags."
       ""
       "Shell command policy:"
       "- If suggesting a shell command, emit it inside:"
-      "  #+begin_src sh"
+      "  ```sh"
       "  ..."
-      "  #+end_src"
+      "  ```"
       "- Do not assume it will be run automatically."
       "- The user will decide whether to execute it."
       ""
       "Python block policy:"
       "- When emitting runnable Python, use:"
-      "  #+begin_src python"
+      "  ```python"
       "  ..."
-      "  #+end_src"
+      "  ```"
       "- Code must be complete and executable."
       "- Respect the Python style requirements below."
       ""
@@ -359,90 +358,52 @@ use `gptel-send` (e.g. C-c RET) as usual."
         (org-end-of-subtree t t)
         (insert "\n*** Conversation\n"))))))
 
-(defun my/gptel-wrap-response (_response _info)
-  "Insert a level-3 Response heading immediately before @assistant."
-  ;; debugging message
-  (message "wrap-response called: point=%s buffer=%s"
-         (point) (current-buffer))
-  (when (derived-mode-p 'org-mode)
-    (save-excursion
-      (goto-char (point-min))
-      (when (re-search-forward "^@assistant" nil t)
-        (beginning-of-line)
-        (insert (format "*** %s — Response\n"
-                        (format-time-string "%Y-%m-%d %H:%M")))))))
-
 (defun my/gptel-normalize-response-headings (beg end)
-  "Normalize assistant response headings relative to containing heading.
+  "Normalize Org headings in the assistant response between BEG and END.
 
-This operates only on the inserted response region from BEG to END."
-  (when (derived-mode-p 'org-mode)
-    (let (base-depth)
-      (when (and (integer-or-marker-p beg)
-                 (integer-or-marker-p end)
-                 (< beg end))
-        (save-excursion
-          (setq base-depth
-                (condition-case nil
-                    (progn
-                      (goto-char (max (point-min) (1- beg)))
-                      (org-back-to-heading t)
-                      (org-current-level))
-                  (error nil))))
-        (when base-depth
-          (save-excursion
-            (save-restriction
-              (let ((beg-marker (copy-marker beg))
-                    (end-marker (copy-marker end t)))
-                (unwind-protect
-                    (progn
-                      (narrow-to-region beg-marker end-marker)
-                      (goto-char (point-min))
-                      ;; skip @assistant
-                      (when (re-search-forward "^@assistant" nil t)
-                        (forward-line 1))
-                      ;; Repair malformed heading prefixes like "**/" -> "** ".
-                      (while (re-search-forward "^\\(\\*+\\)/[ \t]*" nil t)
-                        (replace-match (concat (match-string 1) " ") nil nil))
+Narrow to the inserted response region from BEG to END, locate the
+`@assistant' marker to find where assistant content begins, then scan
+headings under that point.
 
-                      (let (headings
-                            min-depth
-                            target-min
-                            delta
-                            saw-heading)
-                        (goto-char (point-min))
-                        (while (re-search-forward "^\\(\\*+\\)[ \t]" nil t)
-                          (let ((pos (match-beginning 0))
-                                (depth (length (match-string 1))))
-                            (setq saw-heading t)
-                            (push (cons pos depth) headings)
-                            (setq min-depth (if min-depth (min min-depth depth) depth))))
+The shallowest heading found is promoted so that its level becomes 4
+(\"****\"), and all other headings are shifted by the same number of
+stars, preserving their relative depth. Headings that are already at
+level 4 or deeper are never demoted; if the minimum level is >= 4, the
+buffer is left unchanged."
+  (when (and (derived-mode-p 'org-mode)
+             (integer-or-marker-p beg)
+             (integer-or-marker-p end)
+             (< beg end))
+    (save-excursion
+      (save-restriction
+        (narrow-to-region beg end)
+        (goto-char (point-min))
 
-                        (when saw-heading
-                          (setq target-min (max 4 (1+ base-depth))
-                                delta (max 0 (- target-min min-depth)))
+        ;; locate assistant marker
+        (when (re-search-forward "^@assistant\\(?::\\)?[ \t]*$" nil t)
+          (forward-line 1)
 
-                          (setq headings (sort headings (lambda (a b) (> (car a) (car b)))))
+          ;; pass 1: find shallowest heading
+          (let ((content-start (point))
+                min-depth)
+            (save-excursion
+              (goto-char content-start)
+              (while (re-search-forward "^\\(\\*+\\)[ \t]" nil t)
+                (let ((depth (length (match-string 1))))
+                  (setq min-depth (if min-depth
+                                      (min min-depth depth)
+                                    depth)))))
 
-                          ;; Apply replacements from bottom to top to avoid stale positions.
-                          (dolist (h headings)
-                            (goto-char (car h))
-                            (when (looking-at "^\\(\\*+\\)\\([ \t]\\)")
-                              (let* ((old-depth (cdr h))
-                                     (new-depth (+ old-depth delta))
-                                     (new-prefix (concat (make-string new-depth ?*) (match-string 2))))
-                                (replace-match new-prefix nil nil))))
+            ;; pass 2: apply normalization
+            (when min-depth
+              (let ((delta (max 0 (- 4 min-depth))))
+                (when (> delta 0)
+                  (goto-char content-start)
+                  (while (re-search-forward "^\\(\\*+\\)\\([ \t]\\)" nil t)
+                    (replace-match
+                     (concat (match-string 1) (make-string delta ?*) (match-string 2))
+                     t t)))))))))))
 
-                          (goto-char (point-min))
-                          (while (re-search-forward "^\\(\\*+\\)[ \t]" nil t)
-                            (let ((depth (length (match-string 1))))
-                              (when (< depth target-min)
-                                (error "Heading depth invariant violated in response region (target-min=%d, found=%d, line=%d)"
-                                       target-min
-                                       depth
-                                       (line-number-at-pos))))))))
-                  (set-marker beg-marker nil)
-                  (set-marker end-marker nil))))))))))
 
 ;;; ------------------------------------------------------------------
 ;;; Activation
@@ -455,12 +416,6 @@ This operates only on the inserted response region from BEG to END."
   ;; System message
   (setq gptel--system-message #'my/gptel-system-message)
 
-  ;; Order matters:
-  ;; 1. Wrap response
-  (add-hook 'gptel-pre-response-functions
-            #'my/gptel-wrap-response)
-
-  ;; 2. Then normalize headings
   (add-hook 'gptel-post-response-functions
             #'my/gptel-normalize-response-headings))
 
@@ -468,9 +423,6 @@ This operates only on the inserted response region from BEG to END."
   (interactive)
 
   (setq gptel--system-message nil)
-
-  (remove-hook 'gptel-pre-response-functions
-               #'my/gptel-wrap-response)
 
   (remove-hook 'gptel-post-response-functions
                #'my/gptel-normalize-response-headings))

@@ -18,298 +18,190 @@
      (goto-char (point-min))
      ,@body))
 
-(ert-deftest my/gptel-normalize-response-headings-relative-normalization ()
-  (my/gptel-test--with-org-buffer
-      "** Topic\n*** Conversation\n@assistant:\n\n** A\n*** B\n"
-    (search-forward "** A")
-    (let ((beg (match-beginning 0))
-          (end (point-max)))
-      (my/gptel-normalize-response-headings beg end))
-    (should (string-match-p
-             (regexp-quote "**** A\n***** B\n")
-             (buffer-string)))))
+(unless (fboundp 'gptel--convert-markdown->org)
+  ;; TEMPORARY CI fallback: copy gptel's markdown->org converter here
+  ;; because CI test bootstrap currently provides only `(provide 'gptel)`.
+  ;; Remove this once CI loads real gptel in the test environment.
+  (defun gptel--convert-markdown->org (str)
+    "Convert string STR from markdown to org markup.
 
-(ert-deftest my/gptel-normalize-response-headings-repairs-malformed-prefixes ()
+This is a very basic converter that handles only a few markup
+elements."
+    (with-temp-buffer
+      (insert str)
+      (goto-char (point-min))
+      (while (re-search-forward "`+\\|\\*\\{1,2\\}\\|_\\|^#+" nil t)
+        (pcase (match-string 0)
+          ;; Handle backticks
+          ((and (guard (eq (char-before) ?`)) ticks)
+           (gptel--replace-source-marker (length ticks))
+           (save-match-data
+             (catch 'block-end
+               (while (search-forward ticks nil t)
+                 (unless (or (eq (char-before (match-beginning 0)) ?`)
+                             (eq (char-after) ?`))
+                   (gptel--replace-source-marker (length ticks) 'end)
+                   (throw 'block-end nil))))))
+          ;; Handle headings
+          ((and (guard (eq (char-before) ?#)) heading)
+           (cond
+            ((looking-at "[[:space:]]") ;Handle headings
+             (delete-region (line-beginning-position) (point))
+             (insert (make-string (length heading) ?*)))
+            ((looking-at "\\+begin_src") ;Overeager LLM switched to using Org src blocks
+             (save-match-data (re-search-forward "^#\\+end_src" nil t)))))
+          ;; Handle emphasis
+          ("**" (cond
+                 ((looking-back "\\(?:[[:word:][:punct:]\n]\\|\\s-\\)\\*\\{2\\}"
+                                (max (- (point) 3) (point-min)))
+                  (delete-char -1))))
+          ("*"
+           (cond
+            ((save-match-data
+               (and (or (= (point) 2)
+                        (looking-back "\\(?:[[:space:]]\\|\\s-\\)\\(?:_\\|\\*\\)"
+                                      (max (- (point) 2) (point-min))))
+                    (not (looking-at "[[:space:]]\\|\\s-"))))
+             ;; Possible beginning of emphasis
+             (and
+              (save-excursion
+                (when (and (re-search-forward (regexp-quote (match-string 0))
+                                              (line-end-position) t)
+                           (looking-at "[[:space:][:punct:]]\\|\\s-")
+                           (not (looking-back "\\(?:[[:space:]]\\|\\s-\\)\\(?:_\\|\\*\\)"
+                                              (max (- (point) 2) (point-min)))))
+                  (delete-char -1) (insert "/") t))
+              (progn (delete-char -1) (insert "/"))))
+            ((save-excursion
+               (ignore-errors (backward-char 2))
+               (or (and (bobp) (looking-at "\\*[[:space:]]"))
+                   (looking-at "\\(?:$\\|\\`\\)\n\\*[[:space:]]")))
+             ;; Bullet point, replace with hyphen
+             (delete-char -1) (insert "-"))))))
+      (buffer-string)))
+
+  (defun gptel--replace-source-marker (num-ticks &optional end)
+    "Replace markdown style backticks with Org equivalents.
+
+NUM-TICKS is the number of backticks being replaced.  If END is
+true these are \"ending\" backticks.
+
+This is intended for use in the markdown to org stream converter."
+    (let ((from (match-beginning 0)))
+      (delete-region from (point))
+      (if (and (= num-ticks 3)
+               (save-excursion (beginning-of-line)
+                               (skip-chars-forward " \t")
+                               (eq (point) from)))
+          (insert (if end "#+end_src" "#+begin_src "))
+        (insert "=")))))
+
+
+(ert-deftest my/gptel-normalize-response-headings-preserves-relative-depth ()
   (my/gptel-test--with-org-buffer
-      "** Topic\n*** Conversation\n@assistant:\n\n**/ A\n"
-    (search-forward "**/ A")
-    (let ((beg (match-beginning 0))
-          (end (point-max)))
-      (my/gptel-normalize-response-headings beg end))
-    (should (string-match-p
-             (regexp-quote "**** A\n")
-             (buffer-string)))))
+      "*** Response\n@assistant\n* Title\n** Section\n*** Subsection\n"
+    (my/gptel-normalize-response-headings (point-min) (point-max))
+    (should (equal (buffer-string)
+                   "*** Response\n@assistant\n**** Title\n***** Section\n****** Subsection\n"))))
+
+(ert-deftest my/gptel-normalize-response-headings-already-valid-unchanged ()
+  (my/gptel-test--with-org-buffer
+      "*** Response\n@assistant\n**** Title\n***** Section\n"
+    (let ((before (buffer-string)))
+      (my/gptel-normalize-response-headings (point-min) (point-max))
+      (should (equal (buffer-string) before)))))
+
+(ert-deftest my/gptel-normalize-response-headings-wrapper-protection ()
+  (my/gptel-test--with-org-buffer
+      "*** Response\n@assistant\n* Title\n"
+    (my/gptel-normalize-response-headings (point-min) (point-max))
+    (should (equal (buffer-string)
+                   "*** Response\n@assistant\n**** Title\n"))))
+
+(ert-deftest my/gptel-normalize-response-headings-ignores-user-content ()
+  (my/gptel-test--with-org-buffer
+      "*** Prompt\n@user\n* User heading\n\n*** Response\n@assistant\n* Model heading\n"
+    (my/gptel-normalize-response-headings (point-min) (point-max))
+    (should (equal (buffer-string)
+                   "*** Prompt\n@user\n* User heading\n\n*** Response\n@assistant\n**** Model heading\n"))))
+
+(ert-deftest my/gptel-normalize-response-headings-relative-depth-mixed-levels ()
+  (my/gptel-test--with-org-buffer
+      "*** Response\n@assistant\n** A\n**** B\n*** C\n"
+    (my/gptel-normalize-response-headings (point-min) (point-max))
+    (should (equal (buffer-string)
+                   "*** Response\n@assistant\n**** A\n****** B\n***** C\n"))))
 
 (ert-deftest my/gptel-normalize-response-headings-no-headings-no-change ()
   (my/gptel-test--with-org-buffer
-      "** Topic\n*** Conversation\n@assistant:\n\nPlain text.\n"
+      "*** Response\n@assistant\nPlain paragraph.\n"
     (let ((before (buffer-string)))
-      (search-forward "Plain text.")
-      (let ((beg (line-beginning-position))
-            (end (point-max)))
-        (my/gptel-normalize-response-headings beg end))
-      (should (equal before (buffer-string))))))
+      (my/gptel-normalize-response-headings (point-min) (point-max))
+      (should (equal (buffer-string) before)))))
 
-(ert-deftest my/gptel-normalize-response-headings-does-not-modify-outside-region ()
+(ert-deftest my/gptel-normalize-response-headings-region-scoping ()
   (my/gptel-test--with-org-buffer
-      "* Outside\n** Topic\n*** Conversation\n@assistant:\n\n** A\n*** B\n\n* Tail\n"
-    (let ((outside-before nil)
-          (outside-after nil))
-      (search-forward "** A")
-      (let ((beg (match-beginning 0))
-            (end (progn (search-forward "\n* Tail") (match-beginning 0)))
-            beg-marker
-            end-marker)
-        (setq beg-marker (copy-marker beg)
-              end-marker (copy-marker end t))
-        (setq outside-before
-              (concat (buffer-substring-no-properties (point-min) beg)
-                      "<REGION>"
-                      (buffer-substring-no-properties end (point-max))))
-        (my/gptel-normalize-response-headings beg-marker end-marker)
-        (setq outside-after
-              (concat (buffer-substring-no-properties
-                       (point-min)
-                       (marker-position beg-marker))
-                      "<REGION>"
-                      (buffer-substring-no-properties
-                       (marker-position end-marker)
-                       (point-max))))
-        (set-marker beg-marker nil)
-        (set-marker end-marker nil))
-      (should (equal outside-before outside-after)))))
+      "*** Response\n@assistant\n* First\n\n*** Response\n@assistant\n* Second\n"
+    (let* ((second-beg (save-excursion
+                         (goto-char (point-min))
+                         (re-search-forward "^\\*\\*\\* Response$" nil t 2)
+                         (line-beginning-position)))
+           (second-end (point-max)))
+      (my/gptel-normalize-response-headings second-beg second-end)
+      (should (string-match-p "^\\* First$" (buffer-string)))
+      (should (string-match-p "^\\*\\*\\*\\* Second$" (buffer-string))))))
 
+(ert-deftest my/gptel-markdown-conversion-headings-then-normalize ()
+  (let* ((md "## Title\n\n### Section\n")
+         (org (gptel--convert-markdown->org md)))
+    (my/gptel-test--with-org-buffer
+        (concat "*** Response\n@assistant\n" org)
+      (my/gptel-normalize-response-headings (point-min) (point-max))
+      (should (string-match-p "^\\*\\*\\*\\* Title$" (buffer-string)))
+      (should (string-match-p "^\\*\\*\\*\\*\\* Section$" (buffer-string))))))
 
+(ert-deftest my/gptel-markdown-conversion-fenced-code-with-language ()
+  (let* ((md "```python\nprint(\"hi\")\n```\n")
+         (org (gptel--convert-markdown->org md)))
+    (my/gptel-test--with-org-buffer
+        (concat "*** Response\n@assistant\n" org)
+      (let ((before (buffer-string)))
+        (my/gptel-normalize-response-headings (point-min) (point-max))
+        (should (string-match-p "#\\+begin_src python" (buffer-string)))
+        (should (string-match-p "print(\\\"hi\\\")" (buffer-string)))
+        (should (equal before (buffer-string)))))))
 
-(ert-deftest my/gptel-normalize-response-headings-never-promotes-upward ()
-  (my/gptel-test--with-org-buffer
-      "** Topic
-*** Conversation
-@assistant:
+(ert-deftest my/gptel-markdown-conversion-fenced-code-without-language ()
+  (let* ((md "```\nprint(\"hi\")\n```\n")
+         (org (gptel--convert-markdown->org md)))
+    (my/gptel-test--with-org-buffer
+        (concat "*** Response\n@assistant\n" org)
+      (let ((before (buffer-string)))
+        (my/gptel-normalize-response-headings (point-min) (point-max))
+        (should (string-match-p "print(\\\"hi\\\")" (buffer-string)))
+        (should (equal before (buffer-string)))))))
 
-***** Deep
-"
-    (search-forward "***** Deep")
-    (let ((beg (match-beginning 0))
-          (end (point-max)))
-      (my/gptel-normalize-response-headings beg end))
-    (should (string-match-p (regexp-quote "***** Deep
-")
-                            (buffer-string)))))
+(ert-deftest my/gptel-markdown-conversion-list-not-heading ()
+  (let* ((md "- item\n- item\n")
+         (org (gptel--convert-markdown->org md)))
+    (my/gptel-test--with-org-buffer
+        (concat "*** Response\n@assistant\n" org)
+      (let ((before (buffer-string)))
+        (my/gptel-normalize-response-headings (point-min) (point-max))
+        (should (string-match-p "^- item" (buffer-string)))
+        (should-not (string-match-p "^\\*\\*\\*\\* item" (buffer-string)))
+        (should (equal before (buffer-string)))))))
 
-(ert-deftest my/gptel-base-depth-uses-parent-heading ()
-  (my/gptel-test--with-org-buffer
-      "* L1 Parent
-** Topic
-*** Conversation
-@assistant:
-
-** A
-"
-    (search-forward "** A")
-    (let ((beg (match-beginning 0))
-          (end (point-max)))
-      (my/gptel-normalize-response-headings beg end))
-    ;; Must normalize relative to the level-3 conversation, not the level-2 topic
-    (should (string-match-p "**** A" (buffer-string)))))
-
-(ert-deftest my/gptel-normalize-response-headings-no-parent-heading-safe-noop ()
-  (my/gptel-test--with-org-buffer
-      "Plain prelude\n\n** A\n*** B\n"
-    (let ((before (buffer-string)))
-      (search-forward "** A")
-      (let ((beg (match-beginning 0))
-            (end (point-max)))
-        (my/gptel-normalize-response-headings beg end))
-      (should (equal before (buffer-string))))))
-
-(ert-deftest my/gptel-normalize-response-headings-clamps-target-min-to-4 ()
-  (my/gptel-test--with-org-buffer
-      "* L1 Parent\n\n** A\n*** B\n"
-    (search-forward "** A")
-    (let ((beg (match-beginning 0))
-          (end (point-max)))
-      (my/gptel-normalize-response-headings beg end))
-    (should (string-match-p
-             (regexp-quote "**** A\n***** B\n")
-             (buffer-string)))))
-
-(ert-deftest my/gptel-normalize-response-headings-normalizes-depth-one-without-error ()
-  (my/gptel-test--with-org-buffer
-      "** Topic\n*** Conversation\n* Too shallow\n"
-    (search-forward "* Too shallow")
-    (let ((beg (match-beginning 0))
-          (end (point-max)))
-      (my/gptel-normalize-response-headings beg end))
-    (should (string-match-p (regexp-quote "**** Too shallow\n")
-                            (buffer-string)))))
-
-(ert-deftest my/gptel-normalize-response-headings-integration-clamps-to-conversation-depth ()
-  (my/gptel-test--with-org-buffer
-      "** Topic\n*** Question\n@assistant:\n\n*** Outline\n**/ Detail\n"
-    (search-forward "*** Outline")
-    (let ((beg (match-beginning 0))
-          (end (point-max)))
-      (my/gptel-normalize-response-headings beg end))
-    (should (string-match-p
-             (regexp-quote "**** Outline\n**** Detail\n")
-             (buffer-string)))))
-
-(ert-deftest my/gptel-base-depth-ignores-headings-inside-region ()
-  "Base depth must be computed from the nearest heading strictly before BEG,
-not from a heading inside the response region."
-  (with-temp-buffer
-    (org-mode)
-    (insert
-     "* Root\n"
-     "** Topic\n"
-     "*** Question\n"
-     "@assistant\n"
-     "*** Outline\n"      ;; This is INSIDE region and must NOT be used as base
-     "- item\n")
-
-    ;; Region starts at the Outline heading
-    (let* ((beg (save-excursion
-                  (goto-char (point-min))
-                  (search-forward "*** Outline")
-                  (match-beginning 0)))
-           (end (point-max)))
-      (my/gptel-normalize-response-headings beg end))
-
-    ;; After normalization, Outline must become depth 4, not 5
-    (goto-char (point-min))
-    (search-forward "Outline")
-    (beginning-of-line)
-    (should (looking-at "**** Outline"))))
-
-(ert-deftest my/gptel-normalize-response-headings-no-extra-indent ()
-  "Assistant headings should normalize to base-depth+1 (min 4),
-not deeper."
-  (with-temp-buffer
-    (org-mode)
-    (insert
-     "* Root\n"
-     "** Topic\n"
-     "*** Question\n"
-     "@assistant\n"
-     "*** Outline\n")
-
-    (let* ((beg (save-excursion
-                  (goto-char (point-min))
-                  (search-forward "*** Outline")
-                  (match-beginning 0)))
-           (end (point-max)))
-      (my/gptel-normalize-response-headings beg end))
-
-    (goto-char (point-min))
-    (search-forward "Outline")
-    (beginning-of-line)
-
-    ;; Must be exactly 4 stars
-    (should (looking-at "\\*\\{4\\} Outline"))
-    ;; Must NOT be 5
-    (should-not (looking-at "\\*\\{5\\} Outline"))))
-
-(ert-deftest my/gptel-normalize-response-headings-after-assistant-marker ()
-  "Ensure base depth detection works when region begins
-after an @assistant line."
-  (with-temp-buffer
-    (org-mode)
-    (insert
-     "* Root\n"
-     "** Topic\n"
-     "*** Question\n"
-     "@assistant\n\n"
-     "*** Outline\n")
-
-    (let* ((beg (save-excursion
-                  (goto-char (point-min))
-                  (search-forward "*** Outline")
-                  (match-beginning 0)))
-           (end (point-max)))
-      (my/gptel-normalize-response-headings beg end))
-
-    (goto-char (point-min))
-    (search-forward "Outline")
-    (beginning-of-line)
-
-    (should (looking-at "\\*\\{4\\} Outline"))))
-
-(ert-deftest my/gptel-base-depth-strictly-before-beg ()
-  "A heading starting exactly at BEG must not be used
-to compute base depth."
-  (with-temp-buffer
-    (org-mode)
-    (insert
-     "* Root\n"
-     "** Topic\n"
-     "*** Question\n"
-     "*** Outline\n") ;; region starts here
-
-    (let* ((beg (save-excursion
-                  (goto-char (point-min))
-                  (search-forward "*** Outline")
-                  (match-beginning 0)))
-           (end (point-max)))
-      (my/gptel-normalize-response-headings beg end))
-
-    (goto-char (point-min))
-    (search-forward "Outline")
-    (beginning-of-line)
-
-    ;; Must normalize relative to *** Question (depth 3)
-    ;; so target-min = 4
-    (should (looking-at "\\*\\{4\\} Outline"))))
-
-(ert-deftest my/gptel-normalize-response-headings-no-parent-enforces-minimum ()
-  "If no parent heading exists above region,
-assistant headings must still be clamped to depth >= 4."
-  (with-temp-buffer
-    (org-mode)
-    (insert "*** Outline\n")
-
-    (let ((beg (point-min))
-          (end (point-max)))
-      (my/gptel-normalize-response-headings beg end))
-
-    (goto-char (point-min))
-    (should (looking-at "\\*\\{4\\} Outline"))))
-
-(ert-deftest my/gptel-normalize-response-headings-realistic-conversation ()
-  "Simulate real conversation layout under topic and question."
-  (with-temp-buffer
-    (org-mode)
-    (insert
-     "* Root\n"
-     "** Topic\n"
-     "*** Question\n"
-     "@user\n"
-     "Prompt text\n\n"
-     "@assistant\n"
-     "*** Outline\n"
-     "**/ Broken\n")
-
-    ;; Region should start at first assistant heading
-    (let* ((beg (save-excursion
-                  (goto-char (point-min))
-                  (search-forward "*** Outline")
-                  (match-beginning 0)))
-           (end (point-max)))
-      (my/gptel-normalize-response-headings beg end))
-
-    ;; Debug print
-    (message "%s" (buffer-string))
-
-    ;; Outline must be depth 4
-    (goto-char (point-min))
-    (search-forward "Outline")
-    (beginning-of-line)
-    (should (looking-at "\\*\\{4\\} Outline"))
-
-    ;; Broken prefix repaired and clamped
-    (search-forward "Broken")
-    (beginning-of-line)
-    (should (looking-at "\\*\\{4\\} Broken"))))
+(ert-deftest my/gptel-markdown-conversion-emphasis-not-heading ()
+  (let* ((md "*is this bold?*\n")
+         (org (gptel--convert-markdown->org md)))
+    (my/gptel-test--with-org-buffer
+        (concat "*** Response\n@assistant\n" org)
+      (let ((before (buffer-string)))
+        (my/gptel-normalize-response-headings (point-min) (point-max))
+        (should (string-match-p "is this bold\\?" (buffer-string)))
+        (should-not (string-match-p "^\\*\\*\\*\\* is this bold" (buffer-string)))
+        (should (equal before (buffer-string)))))))
 
 (provide 'my-gptel-org-workflow-tests)
 ;;; my-gptel-org-workflow-tests.el ends here
