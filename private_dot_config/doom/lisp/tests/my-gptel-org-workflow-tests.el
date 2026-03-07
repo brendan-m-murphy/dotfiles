@@ -52,23 +52,23 @@ elements."
              (save-match-data (re-search-forward "^#\\+end_src" nil t)))))
           ;; Handle emphasis
           ("**" (cond
-                 ((looking-back "\\(?:[[:word:][:punct:]\n]\\|\\s\\)\\*\\{2\\}"
+                 ((looking-back "\\(?:[[:word:][:punct:]\n]\\|\\s-\\)\\*\\{2\\}"
                                 (max (- (point) 3) (point-min)))
                   (delete-char -1))))
           ("*"
            (cond
             ((save-match-data
                (and (or (= (point) 2)
-                        (looking-back "\\(?:[[:space:]]\\|\\s\\)\\(?:_\\|\\*\\)"
+                        (looking-back "\\(?:[[:space:]]\\|\\s-\\)\\(?:_\\|\\*\\)"
                                       (max (- (point) 2) (point-min))))
-                    (not (looking-at "[[:space:]]\\|\\s"))))
+                    (not (looking-at "[[:space:]]\\|\\s-"))))
              ;; Possible beginning of emphasis
              (and
               (save-excursion
                 (when (and (re-search-forward (regexp-quote (match-string 0))
                                               (line-end-position) t)
-                           (looking-at "[[:space:][:punct:]]\\|\\s")
-                           (not (looking-back "\\(?:[[:space]]\\|\\s\\)\\(?:_\\|\\*\\)"
+                           (looking-at "[[:space:][:punct:]]\\|\\s-")
+                           (not (looking-back "\\(?:[[:space:]]\\|\\s-\\)\\(?:_\\|\\*\\)"
                                               (max (- (point) 2) (point-min)))))
                   (delete-char -1) (insert "/") t))
               (progn (delete-char -1) (insert "/"))))
