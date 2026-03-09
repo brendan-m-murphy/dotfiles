@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Usage
-#   gh-pr-comments-for-llm PR_NUMBER [owner/repo]
-
 PR="${1:-}"
 REPO="${2:-}"
 
@@ -20,7 +17,7 @@ infer_repo () {
 
 if [[ -z "$REPO" ]]; then
   if ! REPO="$(infer_repo 2>/dev/null)"; then
-    echo "Could not infer repository; supply owner/repo." >&2
+    echo "Could not infer repository; provide owner/repo." >&2
     exit 1
   fi
 fi
@@ -54,20 +51,30 @@ query {
 .data.repository.pullRequest.reviewThreads.nodes[]
 | select(.isResolved == false)
 | .path as $path
-| .comments.nodes[]
+| .comments.nodes as $comments
+| $comments[0].diffHunk as $diff
 | "
-----------------------------------------
-REVIEW COMMENT
+========================================
+REVIEW THREAD
 
-Author: \(.author.login)
 File: \($path)
-Line: \(.line // "unknown")
 
 Diff context:
-\(.diffHunk)
+\($diff)
+
+----------------------------------------"
++
+(
+  $comments
+  | map(
+      "
+Author: \(.author.login)
+Line: \(.line // "unknown")
 
 Comment:
 \(.body)
-
-----------------------------------------"
+"
+    )
+  | join("\n----------------------------------------\n")
+)
 '
