@@ -1,0 +1,11 @@
+# Forward to $1 to localhost from localhost:$2 at bp1
+# If local port in use, kill that process first
+
+local_pid=$(lsof -i ":$1" | awk '/ssh/ { print $2; exit }')
+
+if [ -n "$local_pid" ]; then
+   echo "port $1 is used by $local_pid; killing this process"
+   kill "$local_pid"
+fi
+
+ssh -Nf -L "$1":localhost:"$2" bp1

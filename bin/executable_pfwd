@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+
+set -e
+
+usage() {
+  cat <<EOF
+Usage: $0 [options] -r <remote-port> -l <local-port> [--] [ssh-host]
+
+Options:
+  -r <remote-port>   Port on remote server to forward from (required)
+  -l <local-port>    Local port to bind to (required)
+  -y                 Assume yes for killing conflicting local process (no prompt)
+  -v                 Verbose output; print status messages (default: off)
+  -h, --help         Show this help message and exit
+
+Positional arguments:
+  ssh-host           SSH host (default: bp1)
+
+Examples:
+  $0 -r 8080 -l 8080
+  $0 -r 3306 -l 3306 -y bp1
+
+Description:
+  Forwards <remote-port> on remote server to localhost:<local-port>.
+  If the local port is in use, prompts to kill the process (or kills automatically with -y).
+EOF
+}
+
+# Defaults
+SSH_HOST="bp1"
+YES=""
+REMOTE_PORT=""
+LOCAL_PORT=""
+VERBOSE=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -r)
+      REMOTE_PORT="$2"
+      shift 2
+      ;;
+    -l)
+      LOCAL_PORT="$2"
+      shift 2
+      ;;
+    -y)
+      YES="yes"
+      shift
+      ;;
+    -v)
+      VERBOSE="yes"
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      if [[ $# -gt 0 ]]; then
+        SSH_HOST="$1"
+      fi
+      shift
+      ;;
+    *)
+      if [[ -z "$SSH_HOST" ]]; then
+        SSH_HOST="$1"
+      else
+        echo "Unknown argument: $1"
+        usage
+        exit 1
+      fi
+      shift
+      ;;
+  esac
+done
+
+if [[ -z "$REMOTE_PORT" || -z "$LOCAL_PORT" ]]; then
+  echo "Error: Both -r <remote-port> and -l <local-port> are required."
+  usage
+  exit 1
+fi
+
+local_pid=$(lsof -ti tcp:"$LOCAL_PORT" -sTCP:LISTEN | head -n1)
+
+if [ -n "$local_pid" ]; then
+  echo "Kill process $local_pid using port $LOCAL_PORT? [y/N]"
+  if [ "$YES" = "yes" ]; then
+    kill "$local_pid"
+  else
+    read -r confirm
+    case "$confirm" in
+      [yY][eE][sS]|[yY])
+        kill "$local_pid"
+        ;;
+      *)
+        echo "Aborting. Port $LOCAL_PORT still in use."
+        exit 1
+        ;;
+    esac
+  fi
+fi
+
+if [ "$VERBOSE" = "yes" ]; then
+  echo "Forwarding remote port $REMOTE_PORT from $SSH_HOST to localhost:$LOCAL_PORT"
+fi
+
+ssh -Nf -L "$LOCAL_PORT":localhost:"$REMOTE_PORT" "$SSH_HOST"
+
+if [ "$VERBOSE" = "yes" ]; then
+  echo "Port forwarding established."
+fi
