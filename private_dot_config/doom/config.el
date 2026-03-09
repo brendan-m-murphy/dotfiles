@@ -275,39 +275,6 @@
       (message "Copied unresolved PR comments to kill ring (%d chars)"
                (length output)))))
 
-;; SMERGE
-(defun smerge-repeatedly ()
-  "Perform smerge actions again and again"
-  (interactive)
-  (smerge-mode 1)
-  (smerge-transient))
-
-(after! transient
-  (transient-define-prefix smerge-transient ()
-    [["Move"
-      ("n" "next" (lambda () (interactive) (ignore-errors (smerge-next)) (smerge-repeatedly)))
-      ("p" "previous" (lambda () (interactive) (ignore-errors (smerge-prev)) (smerge-repeatedly)))]
-     ["Keep"
-      ("b" "base" (lambda () (interactive) (ignore-errors (smerge-keep-base)) (smerge-repeatedly)))
-      ("u" "upper" (lambda () (interactive) (ignore-errors (smerge-keep-upper)) (smerge-repeatedly)))
-      ("l" "lower" (lambda () (interactive) (ignore-errors (smerge-keep-lower)) (smerge-repeatedly)))
-      ("a" "all" (lambda () (interactive) (ignore-errors (smerge-keep-all)) (smerge-repeatedly)))
-      ("RET" "current" (lambda () (interactive) (ignore-errors (smerge-keep-current)) (smerge-repeatedly)))]
-     ["Diff"
-      ("<" "upper/base" (lambda () (interactive) (ignore-errors (smerge-diff-base-upper)) (smerge-repeatedly)))
-      ("=" "upper/lower" (lambda () (interactive) (ignore-errors (smerge-diff-upper-lower)) (smerge-repeatedly)))
-      (">" "base/lower" (lambda () (interactive) (ignore-errors (smerge-diff-base-lower)) (smerge-repeatedly)))
-      ("R" "refine" (lambda () (interactive) (ignore-errors (smerge-refine)) (smerge-repeatedly)))
-      ("E" "ediff" (lambda () (interactive) (ignore-errors (smerge-ediff)) (smerge-repeatedly)))]
-     ["Other"
-      ("c" "combine" (lambda () (interactive) (ignore-errors (smerge-combine-with-next)) (smerge-repeatedly)))
-      ("r" "resolve" (lambda () (interactive) (ignore-errors (smerge-resolve)) (smerge-repeatedly)))
-      ("k" "kill current" (lambda () (interactive) (ignore-errors (smerge-kill-current)) (smerge-repeatedly)))
-      ("q" "quit" (lambda () (interactive) (smerge-auto-leave)))]]))
-
-
-(add-hook! magit-diff-visit-file-hook (smerge-repeatedly))
-
 
 ;; C/C++
 (after! lsp-clangd
@@ -571,6 +538,11 @@
   (macher-enable))
 
 
+;; ---------------------------------------------------------------------------
+;; Magit config
+;; ---------------------------------------------------------------------------
+
+
 ;;; ---------------------------------------------------------------------------
 ;;; Magit worktree + uv helpers + Codex integration
 ;;; ---------------------------------------------------------------------------
@@ -676,6 +648,88 @@
         (message
          "Remote branch origin/%s still exists — PR may not be merged yet." branch)))))
 
+;;; ------------------------------------------------------------
+;;; Smerge merge workflow
+;;;
+;;; SPC g m   jump to first conflict (centered)
+;;; l         keep lower → next (centered)
+;;; l
+;;; u
+;;; R         refine
+;;; a         keep both → edit
+;;; SPC g m   reopen transient
+;;; n
+;;; s         save + stage + return to magit
+;;; ------------------------------------------------------------
+;
+;; Ensure smerge commands behave nicely in the workflow
+
+(defun my/smerge-next-centered ()
+  (interactive)
+  (ignore-errors (smerge-next))
+  (recenter))
+
+(defun my/smerge-prev-centered ()
+  (interactive)
+  (ignore-errors (smerge-prev))
+  (recenter))
+
+(defun my/smerge-keep-upper-next ()
+  (interactive)
+  (smerge-keep-upper)
+  (ignore-errors (smerge-next))
+  (recenter))
+
+(defun my/smerge-keep-lower-next ()
+  (interactive)
+  (smerge-keep-lower)
+  (ignore-errors (smerge-next))
+  (recenter))
+
+(defun my/smerge-save-stage-and-return ()
+  "Finish merge: leave smerge, save, stage file, return to Magit."
+  (interactive)
+  (smerge-auto-leave)
+  (when (buffer-modified-p)
+    (save-buffer))
+  (when-let ((file (buffer-file-name)))
+    (magit-stage-file file))
+  (magit-mode-bury-buffer))
+
+(defun my/smerge-start ()
+  "Start smerge workflow and jump to first unresolved conflict."
+  (interactive)
+  (smerge-mode 1)
+  (unless (smerge-match-conflict)
+    (goto-char (point-min))
+    (ignore-errors (smerge-next)))
+  (recenter)
+  (smerge-transient))
+
+(after! transient
+  (transient-define-prefix smerge-transient ()
+    [["Move"
+      ("n" "next" my/smerge-next-centered :transient t)
+      ("p" "previous" my/smerge-prev-centered :transient t)]
+
+     ["Resolve"
+      ("u" "upper → next" my/smerge-keep-upper-next :transient t)
+      ("l" "lower → next" my/smerge-keep-lower-next :transient t)
+      ("b" "base" smerge-keep-base :transient t)
+      ("R" "refine" smerge-refine :transient t)]
+
+     ["Manual"
+      ("a" "keep both → edit" smerge-keep-all :transient nil)
+      ("c" "combine hunks" smerge-combine-with-next :transient t)]
+
+     ["Finish"
+      ("s" "save + stage + return to magit" my/smerge-save-stage-and-return :transient nil)
+      ("q" "quit" smerge-auto-leave :transient nil)]]))
+
+;; Enter smerge workflow when resolving conflicts from magit
+
+(add-hook 'magit-diff-visit-file-hook #'my/smerge-start)
+
 ;; Keybindings
 
 (map! :leader
@@ -684,4 +738,5 @@
        :desc "Create worktree + Codex" "c" #'my/magit-new-worktree-and-codex
        :desc "Run uv sync" "v" #'my/uv-sync-here
        :desc "Open in Codex" "o" #'my/open-in-codex
-       :desc "Cleanup merged worktree" "x" #'my/magit-cleanup-worktree))
+       :desc "Cleanup merged worktree" "x" #'my/magit-cleanup-worktree
+       :desc "Resolve merge (smerge)" "m" #'my/smerge-start))
