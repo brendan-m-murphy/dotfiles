@@ -21,7 +21,7 @@
 
 (ert-deftest my/macher-org-property-override ()
   (let* ((tmp (make-temp-file "macher-org-root" t))
-         (expected (expand-file-name tmp)))
+         (expected (file-name-as-directory (expand-file-name tmp))))
     (unwind-protect
         (my/macher-test--with-org-buffer
             (format "* Task\n:PROPERTIES:\n:MACHER_ROOT: %s\n:END:\n" tmp)
@@ -56,7 +56,7 @@
           (with-temp-buffer
             (setq default-directory (file-name-as-directory bufdir))
             (should (equal (my/macher-resolve-workspace-root)
-                           (expand-file-name docs)))))
+                           (file-name-as-directory (expand-file-name docs))))))
       (delete-directory tmp t))))
 
 (ert-deftest my/macher-deepest-allowed-root-wins ()
@@ -71,7 +71,7 @@
           (with-temp-buffer
             (setq default-directory (file-name-as-directory project))
             (should (equal (my/macher-root-from-allowed-roots)
-                           (expand-file-name work)))))
+                           (file-name-as-directory (expand-file-name work))))))
       (delete-directory tmp t))))
 
 (ert-deftest my/macher-no-match-returns-nil ()
