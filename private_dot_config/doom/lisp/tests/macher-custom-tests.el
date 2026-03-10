@@ -39,7 +39,7 @@
           (make-directory (expand-file-name ".git" repo) t)
           (with-temp-file file (insert "print('ok')\n"))
           (with-temp-buffer
-            (insert file)
+            (insert (format "Patch touches %s\n" file))
             (setq default-directory tmp)
             (should (equal (my/macher-root-from-buffer-files)
                            (file-name-as-directory repo)))))

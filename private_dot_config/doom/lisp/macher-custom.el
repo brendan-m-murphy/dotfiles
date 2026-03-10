@@ -12,7 +12,9 @@
   (let ((roots (or my/gptel-allowed-roots
                    (when (fboundp 'my/gptel--allowed-roots)
                      (my/gptel--allowed-roots)))))
-    (mapcar #'expand-file-name (delq nil roots))))
+    (mapcar (lambda (root)
+              (file-name-as-directory (expand-file-name root)))
+            (delq nil roots))))
 
 (defun my/macher-root-from-org ()
   "Return workspace root from Org MACHER_ROOT property, or nil."
@@ -25,36 +27,30 @@
                              nil t)
                         (string-trim (match-string 1)))))))
       (when (and root (not (string-empty-p root)))
-        (expand-file-name root)))))
+        (let ((dir (expand-file-name root)))
+          (when (file-directory-p dir)
+            (file-name-as-directory dir)))))))
 
 (defun my/macher-root-from-buffer-files ()
   "Infer a repo root from path-like strings in the current buffer."
   (save-excursion
     (goto-char (point-min))
-    (let ((path-re "\\(?:~\\|/\\|[[:alnum:]_.-]+/\\)[[:alnum:]_./~-]+")
-          (allowed-roots (my/macher--allowed-roots))
+    (let ((path-re "\\(?:~\\|/\\)[^ \n:\"'<>|]+")
           repo-root)
       (while (and (not repo-root) (re-search-forward path-re nil t))
         (let* ((raw (match-string-no-properties 0))
-               (candidates
-                (append
-                 (list (expand-file-name raw default-directory))
-                 (unless (file-name-absolute-p raw)
-                   (mapcar (lambda (root) (expand-file-name raw root))
-                           allowed-roots)))))
-          (setq repo-root
-                (cl-loop for candidate in candidates
-                         for root = (locate-dominating-file candidate ".git")
-                         when root
-                         return (expand-file-name root)))))
+               (candidate (expand-file-name raw default-directory)))
+          (when (file-exists-p candidate)
+            (when-let ((root (locate-dominating-file candidate ".git")))
+              (setq repo-root (file-name-as-directory (expand-file-name root)))))))
       repo-root)))
 
 (defun my/macher-root-from-allowed-roots ()
   "Return deepest matching allowed root for current buffer, or nil."
-  (let* ((dir (expand-file-name default-directory))
+  (let* ((dir (file-name-as-directory (expand-file-name default-directory)))
          (matches (cl-remove-if-not
                    (lambda (root)
-                     (string-prefix-p (file-name-as-directory root) dir))
+                     (string-prefix-p root dir))
                    (my/macher--allowed-roots))))
     (car (sort matches (lambda (a b) (> (length a) (length b)))))))
 
@@ -67,7 +63,8 @@
 (defun my/gptel-set-macher-workspace ()
   "Set `macher--workspace` for current buffer when a root is available."
   (when-let ((root (my/macher-resolve-workspace-root)))
-    (setq-local macher--workspace (cons 'project root))))
+    (setq-local macher--workspace
+                (cons 'project (file-name-as-directory root)))))
 
 (defun my/gptel-send-with-macher-workspace (orig-fn &rest args)
   "Ensure macher workspace is set before running ORIG-FN with ARGS."
