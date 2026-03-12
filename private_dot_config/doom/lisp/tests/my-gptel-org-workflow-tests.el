@@ -3,9 +3,14 @@
 (require 'ert)
 (require 'org)
 
+(add-to-list 'load-path
+             (expand-file-name ".." (file-name-directory load-file-name)))
+
 (unless (featurep 'gptel)
   (provide 'gptel))
 
+(load-file (expand-file-name "../my-gptel-tools.el"
+                             (file-name-directory load-file-name)))
 (load-file (expand-file-name "../my-gptel-org-workflow.el"
                              (file-name-directory load-file-name)))
 

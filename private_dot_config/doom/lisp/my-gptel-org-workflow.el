@@ -1,42 +1,31 @@
-;;; lisp/my-gptel-org-workflow.el -*- lexical-binding: t; -*-
-;;
+;;; my-gptel-org-workflow.el --- Structured Org workflow for gptel -*- lexical-binding: t; -*-
+
+;;; Commentary:
+
 ;; Structured Org-mode workflow layer for gptel.
 ;;
 ;; This module enforces:
-;;   **   = Topic (human-controlled)
-;;   ***  = Conversation entries
-;;   ****+ = Assistant structure
+;; - `**' as the human-controlled topic level
+;; - `***' as conversation entries
+;; - `****+' as assistant structure
 ;;
-;; It also installs:
-;;   - A dynamic system message
-;;   - Heading demotion safeguards
-;;   - Automatic *** entry creation
-;;
-;; IMPORTANT:
-;;   This module depends on functions from `my-gptel-tools.el`,
-;;   specifically:
-;;
-;;     - `my/gptel--allowed-roots`
-;;     - `my/gptel--project-root`
-;;
-;;   Therefore:
-;;
-;;     (require 'my-gptel-tools)
-;;     (require 'my-gptel-org-workflow)
-;;
-;;   must be evaluated in that order.
-;;
-;;   In Doom, ensure this in config.el:
-;;
-;;     (add-load-path! "lisp")
-;;     (require 'my-gptel-tools)
-;;     (require 'my-gptel-org-workflow)
-;;
-;;   and call `my/gptel-register-tools` inside (after! gptel ...).
-;;
+;; It also installs a dynamic system message, heading normalization, and
+;; commands for creating topics and conversation entries.
+
+;;; Code:
 
 (require 'org)
 (require 'gptel)
+
+(declare-function projectile-project-buffers "ext:projectile")
+(declare-function my/gptel--allowed-path-p "my-gptel-tools" (path))
+(declare-function my/gptel--allowed-roots "my-gptel-tools" ())
+(declare-function my/gptel--project-root "my-gptel-tools" ())
+
+(defvar my/gptel-relevant-buffers nil
+  "List of buffers marked relevant for gptel buffer tools.")
+(defvar my/gptel-write-root nil
+  "Active write root for the current gptel conversation buffer.")
 
 (defgroup my/gptel-org-workflow nil
   "Structured Org workflow layer for gptel."
@@ -50,13 +39,16 @@
   "Dynamic system message for structured Org + Python workflow.
 
 Relies on:
-  - `my/gptel--allowed-roots`
-  - `my/gptel--project-root`
+  - `my/gptel--allowed-roots'
+  - `my/gptel--project-root'
+  - `my/gptel-write-root'
 
 These must be defined in `my-gptel-tools.el`."
   (let* ((roots (ignore-errors (my/gptel--allowed-roots)))
          (cwd   (or (ignore-errors (my/gptel--project-root))
-                    default-directory)))
+                    default-directory))
+         (write-root (or (and (boundp 'my/gptel-write-root) my/gptel-write-root)
+                         "(not set)")))
     (string-join
      (list
       "Output strictly valid GitHub-Flavored Markdown."
@@ -65,6 +57,7 @@ These must be defined in `my-gptel-tools.el`."
       "- Use # headings only."
       "- Never emit org-mode syntax."
       "- Never emit level-1 headings (#)."
+      "- Never emit level-2 headings (##)."
       "- Always leave a blank line after headings."
       "- Use fenced code blocks with language tags."
       ""
@@ -89,6 +82,10 @@ These must be defined in `my-gptel-tools.el`."
                   (string-join roots ", ")
                 "None"))
       (format "Current working project: %s" cwd)
+      (format "Active write root: %s" write-root)
+      "Mutating tools are only available in the editing preset."
+      "When mutating tools are enabled, writes require an explicit write root,"
+      "a GPTEL_WRITE_ROOT Org property, or a first-target git repo inference."
       ""
       "Python style requirements:"
       "- Python 3.11+."
@@ -105,7 +102,9 @@ These must be defined in `my-gptel-tools.el`."
       "Use tools: list_relevant_buffers, search_buffer, read_buffer_range."
       "Prefer search_buffer to reading large ranges."
       ""
-      "When files are mentioned, use available tools (list_files, rg, read_range, head, tail) rather than assuming contents."
+      (concat "When files are mentioned, use available tools "
+              "(list_files, rg, read_range, head, tail) rather than "
+              "assuming contents.")
       ""
       "Reference policy:"
       "- Lines starting with \"Relevant file:\" and Org links like [[file:...]] are pointers."
@@ -132,7 +131,8 @@ These must be defined in `my-gptel-tools.el`."
   (file-truename (expand-file-name path)))
 
 (defun my/gptel--best-relative-path (path)
-  "Return PATH relative to the first matching allowed root, else relative to project, else absolute."
+  "Return PATH relative to the best available root.
+Prefer the first matching allowed root, else the project root, else PATH."
   (let* ((tru (my/gptel--canon-file path))
          (roots (ignore-errors (my/gptel--allowed-roots))))
     (or
@@ -146,6 +146,7 @@ These must be defined in `my-gptel-tools.el`."
      tru)))
 
 (defun my/gptel--remember-ref (path)
+  "Remember PATH in the recent gptel reference history."
   (let ((tru (my/gptel--canon-file path)))
     (setq my/gptel-ref-history
           (cons tru (delete tru my/gptel-ref-history)))
@@ -158,7 +159,7 @@ These must be defined in `my-gptel-tools.el`."
 This does NOT include file contents. It inserts an Org file link that the
 assistant can use with tools (rg/read_range/head/tail) if needed.
 
-With prefix arg (C-u), prompt for a file."
+With a prefix argument, prompt for a file."
   (interactive
    (list (if current-prefix-arg
              (read-file-name "Reference file: " nil nil t)
@@ -213,12 +214,14 @@ With prefix arg (C-u), prompt for a file."
 ;;; ------------------------------------------------------------------
 
 (defun my/gptel-mark-buffer-relevant (&optional buffer)
+  "Mark BUFFER as relevant for gptel buffer tools."
   (interactive)
   (let ((name (buffer-name (or buffer (current-buffer)))))
     (add-to-list 'my/gptel-relevant-buffers name)
     (message "Marked relevant: %s" name)))
 
 (defun my/gptel-unmark-buffer-relevant (&optional buffer)
+  "Remove BUFFER from the relevant gptel buffer set."
   (interactive)
   (let ((name (buffer-name (or buffer (current-buffer)))))
     (setq my/gptel-relevant-buffers
@@ -226,11 +229,13 @@ With prefix arg (C-u), prompt for a file."
     (message "Unmarked relevant: %s" name)))
 
 (defun my/gptel-clear-relevant-buffers ()
+  "Clear all buffers marked relevant for gptel."
   (interactive)
   (setq my/gptel-relevant-buffers nil)
   (message "Cleared relevant buffers"))
 
 (defun my/gptel-show-relevant-buffers ()
+  "Show buffers currently marked relevant for gptel."
   (interactive)
   (message "Relevant buffers: %s"
            (if my/gptel-relevant-buffers
@@ -238,9 +243,10 @@ With prefix arg (C-u), prompt for a file."
              "(none)")))
 
 (defun my/gptel-mark-project-buffers-relevant ()
+  "Mark all current project buffers as relevant for gptel."
   (interactive)
   (unless (fboundp 'projectile-project-buffers)
-    (user-error "projectile not available"))
+    (user-error "Projectile not available"))
   (let ((n 0))
     (dolist (b (projectile-project-buffers))
       (with-current-buffer b
@@ -285,7 +291,7 @@ Returns non-nil if found."
         (error nil)))))
 
 (defun my/gptel-new-topic (title)
-  "Create a new level-2 Topic heading after the current topic subtree.
+  "Create a new level-2 Topic heading named TITLE.
 
 Works from anywhere in the file:
 - If inside a level-2 topic subtree, inserts after that topic.
@@ -317,8 +323,8 @@ Works from anywhere in the file:
 (defun my/gptel-new-entry ()
   "Insert a new *** conversation entry under the current level-2 Topic.
 
-Does NOT send. After writing your prompt under @user:,
-use `gptel-send` (e.g. C-c RET) as usual."
+Does not send. After writing your prompt under @user:, use `gptel-send'
+as usual."
   (interactive)
   (my/gptel--assert-topic)
 
@@ -366,7 +372,7 @@ Narrow to the inserted response region from BEG to END, locate the
 headings under that point.
 
 The shallowest heading found is promoted so that its level becomes 4
-(\"****\"), and all other headings are shifted by the same number of
+(`\"****\"'), and all other headings are shifted by the same number of
 stars, preserving their relative depth. Headings that are already at
 level 4 or deeper are never demoted; if the minimum level is >= 4, the
 buffer is left unchanged."
@@ -420,6 +426,7 @@ buffer is left unchanged."
             #'my/gptel-normalize-response-headings))
 
 (defun my/gptel-org-workflow-disable ()
+  "Disable the structured Org workflow customizations for gptel."
   (interactive)
 
   (setq gptel--system-message nil)
