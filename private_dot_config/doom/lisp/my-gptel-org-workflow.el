@@ -13,11 +13,11 @@
 ;;   - Automatic *** entry creation
 ;;
 ;; IMPORTANT:
-;;   This module depends on functions from `my-gptel-tools.el`,
+;;   This module depends on functions from `my-gptel-tools.el',
 ;;   specifically:
 ;;
-;;     - `my/gptel--allowed-roots`
-;;     - `my/gptel--project-root`
+;;     - `my/gptel--allowed-roots'
+;;     - `my/gptel--project-root'
 ;;
 ;;   Therefore:
 ;;
@@ -32,7 +32,7 @@
 ;;     (require 'my-gptel-tools)
 ;;     (require 'my-gptel-org-workflow)
 ;;
-;;   and call `my/gptel-register-tools` inside (after! gptel ...).
+;;   and call `my/gptel-register-tools' inside (after! gptel ...).
 ;;
 
 (require 'org)
@@ -50,7 +50,7 @@
   "Dynamic system message for structured Org + Python workflow.
 
 Relies on:
-  - `my/gptel--allowed-roots`
+  - `my/gptel--allowed-roots'
   - `my/gptel--project-root'
   - `my/gptel-write-root'
 
@@ -68,6 +68,7 @@ These must be defined in `my-gptel-tools.el`."
       "- Use # headings only."
       "- Never emit org-mode syntax."
       "- Never emit level-1 headings (#)."
+      "- Never emit level-2 headings (##)."
       "- Always leave a blank line after headings."
       "- Use fenced code blocks with language tags."
       ""

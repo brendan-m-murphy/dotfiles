@@ -309,11 +309,11 @@ Changing the root resets the edit-session flag."
         (unless (and (integerp index) (> index 0))
           (user-error "replace_region occurrence must be a positive integer"))
         (let ((pos (nth (1- index) positions)))
-        (unless pos
-          (user-error "replace_region failed: occurrence %s not found" index))
-        (concat (substring text 0 pos)
-                new
-                (substring text (+ pos (length old))))))))))
+          (unless pos
+            (user-error "replace_region failed: occurrence %s not found" index))
+          (concat (substring text 0 pos)
+                  new
+                  (substring text (+ pos (length old))))))))))
 
 (defun my/gptel-tool-list-files (&rest args)
   "List files under :dir matching :glob. Returns relative paths."
