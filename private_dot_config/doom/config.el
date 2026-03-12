@@ -554,6 +554,62 @@
          :desc "Reset edit session" "r" #'my/gptel-reset-edit-session
          :desc "Show write root" "w" #'my/gptel-show-write-root)))
 
+;;; --- gptel request size + cost estimate ------------------------------
+
+(defvar my/gptel-large-context-threshold 272000
+  "Token threshold where OpenAI switches to large-context pricing.")
+
+(defvar my/gptel-model-pricing
+  '(("gpt-5-mini"  :input 0.25)
+    ("gpt-5.2"     :input 1.75)
+    ("gpt-5.4"     :input 2.50 :input-large 5.00)
+    ("gpt-5.4-pro" :input 30.00 :input-large 60.00))
+  "USD input price per 1M tokens.")
+
+(defun my/gptel--estimate-tokens-from-chars (chars)
+  "Return conservative token estimate range from CHARS."
+  (let ((low (/ chars 4.5))
+        (high (/ chars 3.5)))
+    (cons (floor low) (ceiling high))))
+
+(defun my/gptel--price-for-model (model tokens)
+  "Return per-million token price for MODEL given TOKENS."
+  (let* ((pricing (cdr (assoc model my/gptel-model-pricing)))
+         (large (plist-get pricing :input-large))
+         (normal (plist-get pricing :input)))
+    (if (and large (> tokens my/gptel-large-context-threshold))
+        large
+      normal)))
+
+(defun my/gptel--estimate-cost (tokens model)
+  "Estimate USD cost for TOKENS on MODEL."
+  (let ((rate (my/gptel--price-for-model model tokens)))
+    (when rate
+      (/ (* tokens rate) 1000000.0))))
+
+(defun my/gptel-estimate-request ()
+  "Estimate token usage and input cost for the current buffer."
+  (interactive)
+  (let* ((chars (buffer-size))
+         (range (my/gptel--estimate-tokens-from-chars chars))
+         (low (car range))
+         (high (cdr range))
+         (models (mapcar #'car my/gptel-model-pricing))
+         (cost-lines
+          (mapconcat
+           (lambda (m)
+             (let ((cost-low (my/gptel--estimate-cost low m))
+                   (cost-high (my/gptel--estimate-cost high m)))
+               (format "%s: $%.4f–$%.4f"
+                       m
+                       (or cost-low 0.0)
+                       (or cost-high 0.0))))
+           models
+           " | ")))
+    (message
+     "Chars: %d  Tokens≈%d–%d  %s"
+     chars low high cost-lines)))
+
 
 ;; ---------------------------------------------------------------------------
 ;; Magit config
