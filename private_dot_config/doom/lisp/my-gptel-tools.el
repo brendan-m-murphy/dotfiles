@@ -1,4 +1,11 @@
-;;; lisp/my-gptel-tools.el -*- lexical-binding: t; -*-
+;;; my-gptel-tools.el --- Local gptel read and edit tools -*- lexical-binding: t; -*-
+
+;;; Commentary:
+
+;; Local filesystem and buffer tools for gptel, including the write-root policy
+;; used by the direct-edit workflow.
+
+;;; Code:
 
 (require 'cl-lib)
 (require 'org)
@@ -125,12 +132,12 @@ If DIRECTORYP is non-nil, normalize with a trailing slash."
   path)
 
 (defun my/gptel--assert-text-content (content)
-  "Reject CONTENT that looks binary."
+  "Reject CONTENT that may be binary."
   (when (string-match-p "\0" content)
     (user-error "Refusing binary content")))
 
 (defun my/gptel--assert-text-file (path)
-  "Reject PATH if it looks binary."
+  "Reject PATH if it may be binary."
   (with-temp-buffer
     (insert-file-contents path nil 0 (min my/gptel-max-bytes 4096))
     (when (string-match-p "\0" (buffer-string))
@@ -144,7 +151,7 @@ If DIRECTORYP is non-nil, normalize with a trailing slash."
     (buffer-string)))
 
 (defun my/gptel--write-file-string (path content)
-  "Write CONTENT to PATH exactly as provided."
+  "Write CONTENT to PATH exactly as provided by PATH and CONTENT."
   (make-directory (file-name-directory path) t)
   (with-temp-file path
     (insert content)))
@@ -165,7 +172,7 @@ If DIRECTORYP is non-nil, normalize with a trailing slash."
         (buffer-substring-no-properties beg (point))))))
 
 (defun my/gptel--default-dir ()
-  "Default directory for searches: project root, else an allowed root."
+  "Default directory for search tools: project root, else an allowed root."
   (file-name-as-directory
    (file-truename
     (or (my/gptel--project-root)
@@ -215,7 +222,7 @@ git repo roots."
 
 (defun my/gptel--set-write-root-internal (root source)
   "Set ROOT as the active write root from SOURCE.
-Changing the root resets the edit-session flag."
+Change the root and reset the edit-session flag."
   (my/gptel--assert-allowed root)
   (let ((tru (my/gptel--canonical-path root t)))
     (unless (and my/gptel-write-root
@@ -301,22 +308,23 @@ Changing the root resets the edit-session flag."
     (setq positions (nreverse positions))
     (cond
      ((null positions)
-      (user-error "replace_region failed: old_text did not match"))
+      (user-error "Replace_region failed: old_text did not match"))
      ((and (null occurrence) (> (length positions) 1))
-      (user-error "replace_region failed: old_text matched multiple times; specify occurrence"))
+      (user-error "Replace_region failed: old_text matched multiple times; specify occurrence"))
      (t
       (let* ((index (or occurrence 1)))
         (unless (and (integerp index) (> index 0))
-          (user-error "replace_region occurrence must be a positive integer"))
+          (user-error "Replace_region occurrence must be a positive integer"))
         (let ((pos (nth (1- index) positions)))
           (unless pos
-            (user-error "replace_region failed: occurrence %s not found" index))
+            (user-error "Replace_region failed: occurrence %s not found" index))
           (concat (substring text 0 pos)
                   new
                   (substring text (+ pos (length old))))))))))
 
 (defun my/gptel-tool-list-files (&rest args)
-  "List files under :dir matching :glob. Returns relative paths."
+  "List files under :dir matching :glob from ARGS.
+Return relative paths."
   (setq args (my/gptel--args->plist args '("dir" "glob" "max")))
   (let* ((dir (file-name-as-directory
                (my/gptel--canonical-path (or (plist-get args :dir)
@@ -331,7 +339,7 @@ Changing the root resets the edit-session flag."
       (mapconcat (lambda (file) (file-relative-name file dir)) files "\n"))))
 
 (defun my/gptel-tool-rg (&rest args)
-  "Ripgrep search under :dir for :pattern; optional :glob; capped."
+  "Run ripgrep under :dir for :pattern using ARGS."
   (setq args (my/gptel--args->plist args '("dir" "pattern" "glob" "max")))
   (let* ((dir (file-name-as-directory
                (my/gptel--canonical-path (or (plist-get args :dir)
@@ -355,7 +363,7 @@ Changing the root resets the edit-session flag."
          (buffer-string))))))
 
 (defun my/gptel-tool-read-range (&rest args)
-  "Read file line range [start_line,end_line] (inclusive), capped."
+  "Read a file line range from ARGS."
   (setq args (my/gptel--args->plist args '("path" "start_line" "end_line")))
   (let* ((path (expand-file-name (or (plist-get args :path) (user-error "Missing :path"))))
          (start (plist-get args :start_line))
@@ -363,14 +371,14 @@ Changing the root resets the edit-session flag."
     (my/gptel--read-lines path start end)))
 
 (defun my/gptel-tool_head (&rest args)
-  "Read first :n lines of :path, capped."
+  "Read the first :n lines of :path from ARGS."
   (setq args (my/gptel--args->plist args '("path" "n")))
   (let* ((path (expand-file-name (or (plist-get args :path) (user-error "Missing :path"))))
          (n (min my/gptel-max-lines (or (plist-get args :n) 60))))
     (my/gptel--read-lines path 1 n)))
 
 (defun my/gptel-tool_tail (&rest args)
-  "Read last :n lines of :path, capped (from first max-bytes chunk)."
+  "Read the last :n lines of :path from ARGS."
   (setq args (my/gptel--args->plist args '("path" "n")))
   (let* ((path (expand-file-name (or (plist-get args :path) (user-error "Missing :path"))))
          (n (min my/gptel-max-lines (or (plist-get args :n) 60))))
@@ -406,7 +414,7 @@ Changing the root resets the edit-session flag."
   (message "Cleared all session roots"))
 
 (defun my/gptel-show-roots ()
-  "Show current allowed roots."
+  "Show the current allowed roots."
   (interactive)
   (message "Allowed roots: %s"
            (string-join (my/gptel--allowed-roots) ", ")))
@@ -465,7 +473,7 @@ If DIR is inside a git repo, use the repo root as the write root."
 ;;; Mutating tool implementations
 
 (defun my/gptel-tool-create-file (&rest args)
-  "Create :path with :content."
+  "Create :path with :content from ARGS."
   (setq args (my/gptel--args->plist args '("path" "content")))
   (let ((path (expand-file-name (or (plist-get args :path) (user-error "Missing :path"))))
         (content (or (plist-get args :content) "")))
@@ -474,12 +482,12 @@ If DIR is inside a git repo, use the repo root as the write root."
      path
      (lambda (target _state)
        (when (file-exists-p target)
-         (user-error "create_file failed: file already exists: %s" target))
+         (user-error "Create_file failed: file already exists: %s" target))
        (my/gptel--write-file-string target content)
        (format "Created %s" target)))))
 
 (defun my/gptel-tool-write-file (&rest args)
-  "Overwrite :path with :content."
+  "Overwrite :path with :content from ARGS."
   (setq args (my/gptel--args->plist args '("path" "content")))
   (let ((path (expand-file-name (or (plist-get args :path) (user-error "Missing :path"))))
         (content (or (plist-get args :content) "")))
@@ -493,36 +501,36 @@ If DIR is inside a git repo, use the repo root as the write root."
        (format "Wrote %s" target)))))
 
 (defun my/gptel-tool-replace-region (&rest args)
-  "Replace :old_text with :new_text in :path."
+  "Replace :old_text with :new_text in :path from ARGS."
   (setq args (my/gptel--args->plist args '("path" "old_text" "new_text" "occurrence")))
   (let ((path (expand-file-name (or (plist-get args :path) (user-error "Missing :path"))))
         (old-text (or (plist-get args :old_text) (user-error "Missing :old_text")))
         (new-text (or (plist-get args :new_text) ""))
         (occurrence (plist-get args :occurrence)))
     (when (string-empty-p old-text)
-      (user-error "replace_region failed: old_text must not be empty"))
+      (user-error "Replace_region failed: old_text must not be empty"))
     (my/gptel--assert-text-content new-text)
     (my/gptel--write-file-op
      path
      (lambda (target _state)
        (unless (file-exists-p target)
-         (user-error "replace_region failed: file does not exist: %s" target))
+         (user-error "Replace_region failed: file does not exist: %s" target))
        (let* ((original (my/gptel--read-file-string target))
               (updated (my/gptel--replace-nth original old-text new-text occurrence)))
          (my/gptel--write-file-string target updated)
          (format "Updated %s" target))))))
 
 (defun my/gptel-tool-delete-file (&rest args)
-  "Delete :path."
+  "Delete :path from ARGS."
   (setq args (my/gptel--args->plist args '("path")))
   (let ((path (expand-file-name (or (plist-get args :path) (user-error "Missing :path")))))
     (my/gptel--write-file-op
      path
      (lambda (target _state)
        (unless (file-exists-p target)
-         (user-error "delete_file failed: file does not exist: %s" target))
+         (user-error "Delete_file failed: file does not exist: %s" target))
        (when (file-directory-p target)
-         (user-error "delete_file only supports files: %s" target))
+         (user-error "Delete_file only supports files: %s" target))
        (delete-file target)
        (format "Deleted %s" target)))))
 
@@ -551,7 +559,7 @@ If DIR is inside a git repo, use the repo root as the write root."
   (string-join my/gptel-relevant-buffers "\n"))
 
 (defun my/gptel-tool-read-buffer-range (&rest args)
-  "Read inclusive line range [start_line,end_line] from a relevant buffer."
+  "Read a line range from a relevant buffer using ARGS."
   (setq args (my/gptel--args->plist args '("buffer" "start_line" "end_line")))
   (let* ((name (plist-get args :buffer))
          (start (max 1 (or (plist-get args :start_line) 1)))
@@ -567,7 +575,7 @@ If DIR is inside a git repo, use the repo root as the write root."
           (buffer-substring-no-properties beg (point)))))))
 
 (defun my/gptel-tool-search-buffer (&rest args)
-  "Search relevant buffers for PATTERN."
+  "Search relevant buffers for PATTERN using ARGS."
   (setq args (my/gptel--args->plist args '("buffer" "pattern" "context")))
   (let* ((pattern (or (plist-get args :pattern)
                       (user-error "Missing :pattern")))
