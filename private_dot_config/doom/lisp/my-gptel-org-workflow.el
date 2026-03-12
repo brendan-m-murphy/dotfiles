@@ -51,12 +51,15 @@
 
 Relies on:
   - `my/gptel--allowed-roots`
-  - `my/gptel--project-root`
+  - `my/gptel--project-root'
+  - `my/gptel-write-root'
 
 These must be defined in `my-gptel-tools.el`."
   (let* ((roots (ignore-errors (my/gptel--allowed-roots)))
          (cwd   (or (ignore-errors (my/gptel--project-root))
-                    default-directory)))
+                    default-directory))
+         (write-root (or (and (boundp 'my/gptel-write-root) my/gptel-write-root)
+                         "(not set)")))
     (string-join
      (list
       "Output strictly valid GitHub-Flavored Markdown."
@@ -89,6 +92,10 @@ These must be defined in `my-gptel-tools.el`."
                   (string-join roots ", ")
                 "None"))
       (format "Current working project: %s" cwd)
+      (format "Active write root: %s" write-root)
+      "Mutating tools are only available in the editing preset."
+      "When mutating tools are enabled, writes require an explicit write root,"
+      "a GPTEL_WRITE_ROOT Org property, or a first-target git repo inference."
       ""
       "Python style requirements:"
       "- Python 3.11+."

@@ -368,6 +368,7 @@
          :key #'my/openai-api-key
          :models '(gpt-5.4
                    gpt-5.4-pro
+                   gpt-5.3-codex
                    gpt-5.2
                    gpt-5-mini
                    gpt-5-nano
@@ -386,6 +387,7 @@
 (defvar my/gptel-model-profiles
   '((best       . gpt-5.4)
     (best+      . gpt-5.4-pro)
+    (coding     . gpt-5.3-codex)
     (reasoning  . o3)
     (reasoning+ . o3-pro)
     (fast       . gpt-5-mini)
@@ -410,6 +412,7 @@
       (:prefix ("l" . "llm")
        :desc "LLM best"        "b" (cmd! (my/gptel-set-profile 'best))
        :desc "LLM best+"       "B" (cmd! (my/gptel-set-profile 'best+))
+       :desc "LLM coding"      "e" (cmd! (my/gptel-set-profile 'coding))
        :desc "LLM reasoning"   "r" (cmd! (my/gptel-set-profile 'reasoning))
        :desc "LLM reasoning+"  "R" (cmd! (my/gptel-set-profile 'reasoning+))
        :desc "LLM fast"        "f" (cmd! (my/gptel-set-profile 'fast))
@@ -486,26 +489,41 @@
 (add-to-list 'load-path (expand-file-name "lisp" doom-user-dir))
 (require 'my-gptel-tools)
 (require 'my-gptel-org-workflow)
+(defconst my/gptel-read-tool-names
+  '("list_files"
+    "rg"
+    "read_range"
+    "head"
+    "tail"
+    "list_relevant_buffers"
+    "read_buffer_range"
+    "search_buffer"))
+
+(defconst my/gptel-edit-tool-names
+  (append my/gptel-read-tool-names
+          '("create_file"
+            "write_file"
+            "replace_region"
+            "delete_file")))
+
 (after! gptel
   (my/gptel-register-tools)
 
   ;; Make local filesystem + buffer tools the default active toolset.
-  ;; These names must match the :name fields in my-gptel-tools.el.
+  ;; The edit preset adds mutating tools, but it never sets the write root.
   (setq gptel-tools
-        (mapcar #'gptel-get-tool
-                '(
-                  ;; Filesystem tools
-                  "list_files"
-                  "rg"
-                  "read_range"
-                  "head"
-                  "tail"
+        (mapcar #'gptel-get-tool my/gptel-read-tool-names))
 
-                  ;; Buffer tools
-                  "list_relevant_buffers"
-                  "read_buffer_range"
-                  "search_buffer"
-                  )))
+  (gptel-make-preset
+   'my-gptel-read-only
+   :description "Read-only local tools for retrieval and inspection."
+   :tools my/gptel-read-tool-names)
+
+  (gptel-make-preset
+   'my-gptel-edit
+   :description "Editing preset with mutating tools. Write root must be set separately."
+   :tools my/gptel-edit-tool-names
+   :model 'gpt-5.3-codex)
 
   (my/gptel-org-workflow-enable)
 
@@ -527,15 +545,14 @@
         :desc "Unmark buffer relevant" "a u" #'my/gptel-unmark-buffer-relevant
         :desc "Show relevant buffers" "a M" #'my/gptel-show-relevant-buffers
         :desc "Clear relevant buffers" "a C" #'my/gptel-clear-relevant-buffers
-        :desc "Mark project buffers relevant" "a p" #'my/gptel-mark-project-buffers-relevant))
-
-(use-package! macher
-  :after gptel
-  :custom
-  (macher-action-buffer-ui 'org)
-  :config
-  (macher-install)
-  (macher-enable))
+        :desc "Mark project buffers relevant" "a p" #'my/gptel-mark-project-buffers-relevant)
+  (map! :leader
+        (:prefix ("a w" . "gptel write root")
+         :desc "Set write root" "s" #'my/gptel-set-write-root
+         :desc "Set write root to project" "p" #'my/gptel-set-write-root-to-project
+         :desc "Clear write root" "c" #'my/gptel-clear-write-root
+         :desc "Reset edit session" "r" #'my/gptel-reset-edit-session
+         :desc "Show write root" "w" #'my/gptel-show-write-root)))
 
 
 ;; ---------------------------------------------------------------------------
