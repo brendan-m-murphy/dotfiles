@@ -15,7 +15,6 @@
 ;;; Code:
 
 (require 'org)
-(require 'my-gptel-tools)
 (require 'gptel)
 
 (declare-function projectile-project-buffers "ext:projectile")
