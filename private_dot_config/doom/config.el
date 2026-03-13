@@ -489,6 +489,7 @@
 (add-to-list 'load-path (expand-file-name "lisp" doom-user-dir))
 (require 'my-gptel-tools)
 (require 'my-gptel-org-workflow)
+(require 'my-task-workflow)
 (defconst my/gptel-read-tool-names
   '("list_files"
     "rg"
