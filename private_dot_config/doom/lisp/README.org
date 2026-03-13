@@ -1,0 +1,210 @@
+#+TITLE: Local Doom Lisp Modules
+
+* Overview
+
+This directory contains local Emacs Lisp modules loaded from Doom config.
+
+The newest addition is =my-task-workflow.el=, which adds a task-centric Org
+workflow for:
+
+- planning in Org
+- GitHub issue creation via =gh=
+- per-task git worktrees
+- per-task Doom workspaces
+- resuming work from the Org task subtree
+
+The design is intentionally small. The Org task heading is the anchor, and the
+rest of the state is stored as properties on that heading.
+
+* Task Workflow
+
+** File
+
+- [[file:my-task-workflow.el][my-task-workflow.el]]
+
+** Purpose
+
+This module connects one Org task subtree to:
+
+- a repository
+- a GitHub issue
+- a git branch
+- a git worktree
+- a Doom workspace
+
+This lets the Org task act as the entry point for planning and resuming work.
+
+** Expected Org shape
+
+The workflow assumes a task subtree like this:
+
+#+begin_src org
+* Basis operator updates
+
+** Basis operator phase 1
+:PROPERTIES:
+:REPO_PATH: ~/Documents/openghg_inversions
+:GH_ISSUE: 417
+:GH_URL: https://github.com/org/repo/issues/417
+:BRANCH: issue-417-basis-operator-phase-1
+:WORKTREE: ~/Documents/openghg_inversions-wt/openghg_inversions-iss-417
+:WORKSPACE: openghg_inversions-iss-417
+:END:
+
+*** Notes
+Some implementation notes.
+
+*** user prompt
+...
+
+*** AI response
+...
+#+end_src
+
+By default the task heading level is =2=, but this is configurable via
+=my/task-heading-level=. Commands can be run from anywhere inside the task
+subtree; they climb to the nearest ancestor heading at that level.
+
+** Main commands
+
+*** =M-x my/task-create=
+
+Use this when a task does not yet have a GitHub issue.
+
+It will:
+
+1. find the task root
+2. resolve =REPO_PATH= from the task, inherited Org properties, or an interactive prompt
+3. export the direct =Notes= child subtree to Markdown
+4. create a GitHub issue with =gh issue create=
+5. store =GH_ISSUE= and =GH_URL=
+6. derive =BRANCH=, =WORKSPACE=, and =WORKTREE= if missing
+7. call =my/task-open=
+
+*** =M-x my/task-open=
+
+Use this to resume work on an existing task.
+
+It will:
+
+1. find the task root
+2. read task properties
+3. derive missing values if needed
+4. ensure the worktree exists
+5. create or switch to the Doom workspace
+6. open the worktree directory
+7. open =magit-status= in that worktree
+
+** Naming rules
+
+If =GH_ISSUE= exists:
+
+- workspace: =<repo>-iss-<issue>=
+- branch: =issue-<issue>-<slug>=
+
+If =GH_ISSUE= does not exist:
+
+- workspace: =<repo>-task-<slug>=
+- branch: =<slug>=
+
+Worktrees use a dedicated root per repository:
+
+- worktree root: =<parent>/<repo>-wt=
+- worktree path: =<worktree-root>/<workspace>=
+
+Example:
+
+- repo: =~/Documents/openghg_inversions=
+- workspace: =openghg_inversions-iss-417=
+- worktree: =~/Documents/openghg_inversions-wt/openghg_inversions-iss-417=
+
+** Properties
+
+The workflow reads and writes these Org properties on the task heading:
+
+- =REPO_PATH=
+- =GH_ISSUE=
+- =GH_URL=
+- =BRANCH=
+- =WORKTREE=
+- =WORKSPACE=
+
+=REPO_PATH= may also be provided once per file using:
+
+#+begin_src org
+#+PROPERTY: REPO_PATH ~/Documents/openghg_inversions
+#+end_src
+
+** Assumptions
+
+- =gh= is installed and authenticated
+- =git= is available
+- Doom workspaces are enabled
+- Magit is available
+- task planning happens in Org files, possibly outside the repository
+
+* gptel Files
+
+** [[file:my-gptel-tools.el][my-gptel-tools.el]]
+
+Local filesystem and buffer tools for gptel.
+
+The key idea is controlled access:
+
+- read/search tools for local files and buffers
+- optional edit tools
+- write-root enforcement so edits stay inside an explicit repo or directory
+
+This is the low-level tool layer used by the Org/gptel workflow.
+
+** [[file:my-gptel-org-workflow.el][my-gptel-org-workflow.el]]
+
+Org-specific structure and conventions for gptel conversations.
+
+It keeps a shallow heading structure so human planning and LLM responses can
+coexist cleanly:
+
+- human topic/task headings near the top
+- conversation entries below that
+- assistant-generated substructure deeper still
+
+It also provides the dynamic system message and reference helpers used during
+AI-assisted work.
+
+* GitHub Links
+
+** [[file:org-gh/org-gh.el][org-gh/org-gh.el]]
+
+This adds =gh:= Org links for GitHub issues and PRs. It is separate from the
+task workflow; the task workflow currently uses the =gh= CLI directly for issue
+creation.
+
+* Tests
+
+** [[file:tests/my-task-workflow-tests.el][tests/my-task-workflow-tests.el]]
+
+Tests for the task workflow:
+
+- task-root detection
+- name derivation
+- worktree layout
+- =gh= output parsing
+- worktree creation behavior
+
+** [[file:tests/my-gptel-org-workflow-tests.el][tests/my-gptel-org-workflow-tests.el]]
+
+Tests for Org heading normalization and Markdown-to-Org behavior in the gptel
+workflow.
+
+** [[file:tests/my-gptel-tools-edit-tests.el][tests/my-gptel-tools-edit-tests.el]]
+
+Tests for write-root enforcement and edit tool behavior in the gptel tools
+layer.
+
+* Loading
+
+The local modules are made available by adding this directory to Doom's load
+path in =config.el= and requiring the relevant files.
+
+At the moment, =my-task-workflow.el= is loaded alongside the existing gptel
+modules.

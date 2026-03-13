@@ -1,0 +1,513 @@
+#+TITLE: Task-Based Doom Emacs Workflow
+
+* Introduction
+
+This Doom Emacs setup is built around a task-based workflow for AI-assisted
+programming.
+
+The key idea is simple:
+
+- planning lives in Org files
+- each repository has one planning file
+- each task is anchored by an Org heading
+- that task heading links planning, AI conversation, GitHub issue metadata,
+  git worktree state, and a Doom workspace
+
+This makes it possible to move between planning and implementation without
+losing context. You can plan work in Org, pair program in gptel, create a
+dedicated worktree, switch into a dedicated workspace, and come back later by
+returning to the same task subtree.
+
+This document is written for someone inheriting the setup. It explains the
+high-level workflow first, then the conventions behind it, and ends with the
+local technical details.
+
+* Core Model
+
+** One Org planning file per repository
+
+Planning files live outside the repository itself.
+
+Typical layout:
+
+#+begin_src text
+~/Documents/openghg_inversions
+~/Documents/openghg_inversions-wt/
+
+~/Documents/org/projects/
+    openghg_inversions-plan.org
+#+end_src
+
+The planning file is the long-lived control document for that repository. It
+collects:
+
+- future tasks
+- active tasks
+- AI conversation history
+- issue metadata
+- links back to branches, worktrees, and workspaces
+
+This is intentionally separate from the repo so the planning file remains stable
+across branches and worktrees.
+
+** One task heading per unit of work
+
+Within a planning file, each task is a topic heading with Org properties. That
+task is the anchor for everything else.
+
+Typical shape:
+
+#+begin_src org
+* Basis operator refactor
+
+** Basis operator phase 1
+:PROPERTIES:
+:REPO_PATH: ~/Documents/openghg_inversions
+:GH_ISSUE: 417
+:GH_URL: https://github.com/org/repo/issues/417
+:BRANCH: issue-417-basis-operator-phase-1
+:WORKTREE: ~/Documents/openghg_inversions-wt/openghg_inversions-iss-417
+:WORKSPACE: openghg_inversions-iss-417
+:END:
+
+*** Notes
+Implementation notes, acceptance criteria, context, and planning.
+
+*** user prompt
+Prompt sent to the model.
+
+*** AI response
+Model response.
+
+* Misc
+** Fix user issue 123
+:PROPERTIES:
+:REPO_PATH: ~/Documents/openghg_inversions
+:GH_ISSUE: 123
+:GH_URL: https://github.com/org/repo/issues/123
+:BRANCH: issue-123-something-is-not-working
+:WORKTREE: ~/Documents/openghg_inversions-wt/openghg_inversions-iss-123
+:WORKSPACE: openghg_inversions-iss-123
+:END:
+
+*** Notes
+That thing broke!
+
+*** user prompt
+Prompt sent to the model.
+
+*** AI response
+Model response.
+
+#+end_src
+
+When this task is resumed later, the task heading contains enough metadata to
+recover the implementation context quickly.
+
+* Org Structure Conventions
+
+** Heading depth rules
+
+The gptel workflow relies on a shallow, stable heading scheme:
+
+- =*= repository root, grouping, or large theme
+- =**= task/topic
+- =***= conversation entry
+- =****+= acceptable depth for model-generated structure
+
+This matters because LLM responses often need subheadings. If human planning is
+already too deep, model output becomes awkward or unreadable.
+
+The convention is:
+
+- humans own the top levels
+- conversations happen at =***=
+- model structure starts at =****=
+
+This keeps the buffer readable and avoids fighting Org hierarchy during
+AI-assisted work.
+
+** Conversation entry conventions
+
+The names under a task are intentionally simple. Common entries are:
+
+- =*** Notes=
+- =*** user prompt=
+- =*** AI response=
+
+The task workflow only gives special meaning to =Notes=. Everything else is just
+conversation history and working context.
+
+This means you can preserve chat history without forcing a rigid schema.
+
+** Why this shape exists
+
+This structure supports two competing needs:
+
+1. Org planning needs a clear, human-controlled task outline.
+2. AI responses need room for deeper structure such as sections, steps, or code
+   explanations.
+
+The chosen depth scheme is the compromise that makes both work in the same file.
+
+* Quick Usage Guide
+
+** Starting a new task
+
+1. Open the planning file for the repository.
+2. Create a new =**= task heading under the appropriate =*= grouping.
+3. Add a =*** Notes= section describing the work.
+4. Optionally add more planning notes or prompt/response history.
+5. Run =M-x my/task-create= when you want to turn the task into an issue and a
+   working environment.
+
+=my/task-create= will:
+
+- find the task heading
+- resolve the repo
+- export =Notes= to Markdown
+- create a GitHub issue with =gh=
+- store =GH_ISSUE= and =GH_URL=
+- derive =BRANCH=, =WORKTREE=, and =WORKSPACE= if needed
+- call =my/task-open=
+
+** Reopening an existing task
+
+Run =M-x my/task-open= from anywhere inside the task subtree.
+
+It will:
+
+- climb to the task heading
+- read the task properties
+- create the git worktree if needed
+- create or switch to the Doom workspace
+- open the worktree
+- open Magit in that worktree
+
+This is the main “resume work” command.
+
+** Creating tasks without a GitHub issue yet
+
+This is allowed.
+
+If a task does not yet have =GH_ISSUE=, the workflow can still derive temporary
+names:
+
+- workspace: =<repo>-task-<slug>=
+- branch: =<slug>=
+
+Once an issue is created, the task can transition to the issue-based naming
+scheme.
+
+* Workspaces and Worktrees
+
+** Doom workspaces
+
+Each task gets its own Doom workspace.
+
+Workspace names are always repo-prefixed, for example:
+
+- =openghg_inversions-iss-417=
+- =openghg_inversions-task-basis-operator-phase-1=
+
+This avoids ambiguity when working across multiple repositories at once.
+
+The workspace is the UI-level context for a task:
+
+- buffers
+- windows
+- Magit
+- terminals
+- REPLs
+
+Switching back to a task workspace restores the practical editing environment.
+
+** Git worktrees
+
+Each task also gets its own git worktree.
+
+The layout is:
+
+- main repo: =~/Documents/openghg_inversions=
+- worktree root: =~/Documents/openghg_inversions-wt=
+- task worktree: =~/Documents/openghg_inversions-wt/openghg_inversions-iss-417=
+
+This keeps all task worktrees for a repository under one predictable directory.
+
+The worktree directory name matches the workspace name. That makes it easier to
+map between:
+
+- Org task
+- issue number
+- worktree directory
+- Doom workspace
+
+** Naming summary
+
+If =GH_ISSUE= exists:
+
+- workspace: =<repo>-iss-<issue>=
+- branch: =issue-<issue>-<slug>=
+- worktree: =<repo>-wt/<workspace>=
+
+If =GH_ISSUE= is absent:
+
+- workspace: =<repo>-task-<slug>=
+- branch: =<slug>=
+- worktree: =<repo>-wt/<workspace>=
+
+* Common Workflow Patterns
+
+** Multi-PR sequences in one file
+
+One planning file often covers a sequence of related tasks for a single repo.
+
+Example:
+
+#+begin_src org
+* Basis operator rewrite
+
+** Phase 1
+** Phase 2
+** Validation
+** Cleanup
+#+end_src
+
+This is useful when work naturally decomposes into multiple PRs. The =*= header
+acts as the umbrella topic, while each =**= task is a concrete work item with
+its own issue, branch, worktree, and workspace.
+
+** Miscellaneous buckets
+
+Not every task needs to belong to a multi-step plan. It is also fine to keep
+headings such as:
+
+- =* Misc=
+- =* Bugfixes=
+- =* Quick fixes=
+
+Under those, individual =**= tasks can still use the same workflow.
+
+The grouping heading is for human organisation only. The actionable anchor is
+still the task heading.
+
+** Long-running exploratory tasks
+
+Some tasks accumulate a lot of back-and-forth with the model. That is expected.
+
+The recommended pattern is:
+
+- keep durable planning and decisions in =*** Notes=
+- keep chat history in =*** user prompt= and =*** AI response=
+- allow AI responses to use =****+= headings if needed
+
+The task workflow only depends on the task heading and the =Notes= section, so
+the rest of the subtree can remain flexible.
+
+* AI Coding Modes
+
+There are two main AI coding paradigms in this setup.
+
+** 1. Pair programming in gptel
+
+This is the interactive mode inside Emacs.
+
+Use this when you want:
+
+- iterative discussion
+- code review or design help
+- prompt/response history stored in Org
+- direct editing via local tools
+- a tight loop between planning and implementation
+
+The custom gptel setup adds:
+
+- Org-friendly conversation structure
+- lightweight file references
+- local read/search tools
+- optional edit tools
+- write-root controls to keep edits scoped
+
+This mode is best when you want to stay in the editor and collaborate closely
+with the model.
+
+** 2. Delegating to Codex
+
+This is the “mechanical execution” mode.
+
+Use Codex when the work is more like:
+
+- large refactors
+- systematic edits
+- test-driven implementation
+- repetitive cleanup
+- PR-oriented execution from a specification
+
+The typical pattern is:
+
+1. plan the task in Org
+2. use gptel for local thinking, iteration, or prompt preparation if useful
+3. delegate execution to Codex
+4. return to the Org task to record outcomes and continue the next step
+
+This setup is designed so both modes can coexist without changing the underlying
+task model.
+
+* Python Workflow Tips
+
+For Python repositories, it is usually best to create the local virtual
+environment early.
+
+Typical pattern:
+
+1. open the task
+2. switch into the worktree
+3. create or sync the environment with =uv sync=
+4. activate whatever project-local tooling is needed
+
+There is a quick reminder in this setup that =C-c g v= can be used to run the
+project venv setup flow. In practice, the important point is that each task
+worktree should have a working Python environment before substantial AI-assisted
+editing begins.
+
+The reason is practical:
+
+- imports resolve correctly
+- formatters and linters behave consistently
+- tests run in the right environment
+- gptel-assisted edits are less likely to drift from project reality
+
+* Archiving and Closing Tasks
+
+** Org archiving
+
+Completed or inactive tasks should generally be archived using Org’s built-in
+archive workflow, rather than moved to a manual archive section.
+
+In practice:
+
+- archive the task subtree with standard Org archive commands
+- keep the planning file focused on active and upcoming work
+
+** Worktree cleanup
+
+Archiving the Org task does not automatically remove the git worktree. That
+cleanup is still a human responsibility.
+
+When closing out a task, usually check:
+
+1. is the branch merged or intentionally preserved?
+2. is the worktree still needed?
+3. can the workspace be closed?
+
+Typical cleanup after merge:
+
+- remove or prune the worktree
+- optionally delete the branch if appropriate
+- archive the Org subtree
+
+The key point is that the Org archive is the planning-side cleanup, while
+worktree cleanup is the repository-side cleanup.
+
+* Technical Details
+
+** Main files
+
+- [[file:lisp/my-task-workflow.el][lisp/my-task-workflow.el]]
+- [[file:lisp/my-gptel-org-workflow.el][lisp/my-gptel-org-workflow.el]]
+- [[file:lisp/my-gptel-tools.el][lisp/my-gptel-tools.el]]
+- [[file:lisp/org-gh/org-gh.el][lisp/org-gh/org-gh.el]]
+
+** What each file does
+
+*** =my-task-workflow.el=
+
+Implements the task-centric workflow:
+
+- task-root detection
+- property handling
+- issue creation with =gh=
+- worktree creation
+- workspace switching
+- Magit handoff
+
+*** =my-gptel-org-workflow.el=
+
+Defines the Org chat structure and supporting helpers for gptel:
+
+- prompt/response prefixes
+- heading normalization
+- reference insertion helpers
+- system message logic
+
+*** =my-gptel-tools.el=
+
+Provides local tooling for gptel:
+
+- file search and reads
+- edit operations
+- write-root enforcement
+- path safety checks
+
+*** =org-gh.el=
+
+Adds =gh:= Org links for GitHub issues and PRs.
+
+** Properties used on task headings
+
+- =REPO_PATH=
+- =GH_ISSUE=
+- =GH_URL=
+- =BRANCH=
+- =WORKTREE=
+- =WORKSPACE=
+
+It is also valid to define =REPO_PATH= once at file level:
+
+#+begin_src org
+#+PROPERTY: REPO_PATH ~/Documents/openghg_inversions
+#+end_src
+
+** How task detection works
+
+Task commands do not require point to be exactly on the task heading. They climb
+up the outline to the nearest ancestor at the configured task depth.
+
+Today, the default is:
+
+- =my/task-heading-level = 2=
+
+That matches the current =**= task convention.
+
+* Reloading and Updating
+
+When updating these local Lisp files, the usual first step is to reload them in
+the running Emacs session.
+
+Common options:
+
+- evaluate the buffer
+- use =load-file= on the updated file
+- run =M-x doom/reload=
+
+If that does not fully pick up the changes, use the heavier reset:
+
+1. run =doom sync=
+2. restart Emacs
+
+In practice, simple local Lisp changes often work with =load-file= or
+=doom/reload=. Package or module changes are more likely to require =doom sync=
+and a restart.
+
+* Future Improvements
+
+Some likely future extensions:
+
+- make the task heading depth more user-visible and easier to customize
+- add explicit commands for closing tasks and cleaning up worktrees
+- add helpers for linking existing issues instead of creating new ones
+- improve workspace restoration when resuming a task
+- add more project bootstrapping helpers for common Python workflows
+
+The current version aims to stay small and robust rather than covering every
+possible lifecycle detail.
