@@ -196,6 +196,27 @@ The stored value is always normalized to the repo root."
   (let ((default (my/task--heading-title)))
     (read-string (format "Issue title (%s): " default) nil nil default)))
 
+(defun my/task--normalize-issue-reference (issue-ref)
+  "Normalize ISSUE-REF into a plist with :gh_issue and optional :gh_url."
+  (let ((trimmed (string-trim issue-ref)))
+    (cond
+     ((string-match "\\`[0-9]+\\'" trimmed)
+      (list :gh_issue trimmed))
+     ((string-match "/issues/\\([0-9]+\\)/*\\'" trimmed)
+      (list :gh_issue (match-string 1 trimmed)
+            :gh_url trimmed))
+     (t
+      (user-error "Issue reference must be a number or GitHub issue URL: %s"
+                  issue-ref)))))
+
+(defun my/task--prompt-issue-reference ()
+  "Prompt for an issue number or URL."
+  (read-string "Issue number or URL: "
+               nil nil
+               (or (my/task--get-property "GH_URL" nil)
+                   (my/task--get-property "GH_ISSUE" nil)
+                   "")))
+
 (defun my/task--derive-workspace (repo-name issue slug)
   "Derive a workspace name from REPO-NAME, ISSUE, and SLUG."
   (if issue
@@ -208,6 +229,11 @@ The stored value is always normalized to the repo root."
       (format "issue-%s-%s" issue slug)
     slug))
 
+(defun my/task--branch-slug (branch)
+  "Return a slug-like value derived from BRANCH."
+  (let ((slug (downcase (replace-regexp-in-string "[^[:alnum:]]+" "-" branch))))
+    (string-trim slug "-" "-")))
+
 (defun my/task--derive-worktree (repo-path workspace)
   "Derive a worktree path from REPO-PATH and WORKSPACE."
   (expand-file-name workspace (my/task--worktree-root repo-path)))
@@ -219,6 +245,52 @@ The stored value is always normalized to the repo root."
       (user-error "Could not parse gh issue output: %s" output))
     (list :gh_url trimmed
           :gh_issue (match-string 1 trimmed))))
+
+(defun my/task--branch-names (repo-path)
+  "Return local branch names in REPO-PATH."
+  (let ((default-directory repo-path)
+        (output nil))
+    (setq output (my/task--call-process-string
+                  "git" "for-each-ref" "--format=%(refname:short)" "refs/heads"))
+    (split-string output "\n" t)))
+
+(defun my/task--prompt-branch (repo-path)
+  "Prompt for a branch name in REPO-PATH."
+  (let* ((branches (my/task--branch-names repo-path))
+         (default (or (my/task--get-property "BRANCH" nil)
+                      (car branches)
+                      "")))
+    (if branches
+        (completing-read (format "Branch (%s): " default)
+                         branches nil t nil nil default)
+      (read-string "Branch: " default))))
+
+(defun my/task--metadata-with-overrides (metadata &rest overrides)
+  "Return METADATA plist with OVERRIDES applied."
+  (let ((result (copy-sequence metadata)))
+    (while overrides
+      (setq result (plist-put result (pop overrides) (pop overrides))))
+    result))
+
+(defun my/task--refresh-derived-metadata (metadata)
+  "Refresh derived metadata fields from METADATA."
+  (let* ((issue (plist-get metadata :gh_issue))
+         (repo-path (plist-get metadata :repo_path))
+         (repo-name (plist-get metadata :repo_name))
+         (slug (plist-get metadata :slug))
+         (workspace (or (plist-get metadata :workspace_explicit)
+                        (plist-get metadata :workspace)
+                        (my/task--derive-workspace repo-name issue slug)))
+         (branch (or (plist-get metadata :branch_explicit)
+                     (plist-get metadata :branch)
+                     (my/task--derive-branch issue slug)))
+         (worktree (or (plist-get metadata :worktree_explicit)
+                       (plist-get metadata :worktree)
+                       (my/task--derive-worktree repo-path workspace))))
+    (setq metadata (plist-put metadata :workspace workspace))
+    (setq metadata (plist-put metadata :branch branch))
+    (setq metadata (plist-put metadata :worktree worktree))
+    metadata))
 
 (defun my/task--gh-create-issue (repo-path title body-file)
   "Create a GitHub issue in REPO-PATH with TITLE and BODY-FILE."
@@ -328,22 +400,94 @@ The stored value is always normalized to the repo root."
   "Write METADATA plist back to the current task heading."
   (my/task--write-properties metadata))
 
+(defun my/task--open-with-metadata (metadata)
+  "Open task context using METADATA."
+  (let ((repo-path (plist-get metadata :repo_path))
+        (branch (plist-get metadata :branch))
+        (worktree (plist-get metadata :worktree))
+        (workspace (plist-get metadata :workspace)))
+    (my/task--ensure-worktree repo-path branch worktree)
+    (my/task--write-derived-properties metadata)
+    (my/task--switch-workspace workspace)
+    (my/task--open-worktree worktree)
+    (my/task--magit-status worktree)))
+
 ;;;###autoload
 (defun my/task-open ()
   "Open the current task's worktree, workspace, and Magit status."
   (interactive)
   (save-excursion
     (my/task--goto-task-root)
-    (let* ((metadata (my/task--collect-metadata))
-           (repo-path (plist-get metadata :repo_path))
-           (branch (plist-get metadata :branch))
-           (worktree (plist-get metadata :worktree))
-           (workspace (plist-get metadata :workspace)))
-      (my/task--ensure-worktree repo-path branch worktree)
+    (my/task--open-with-metadata (my/task--collect-metadata))))
+
+;;;###autoload
+(defun my/task-init ()
+  "Prepare the current task locally without creating a GitHub issue."
+  (interactive)
+  (save-excursion
+    (my/task--goto-task-root)
+    (let ((metadata (my/task--collect-metadata)))
       (my/task--write-derived-properties metadata)
-      (my/task--switch-workspace workspace)
-      (my/task--open-worktree worktree)
-      (my/task--magit-status worktree))))
+      (my/task--open-with-metadata metadata))))
+
+;;;###autoload
+(defun my/task-link-issue (issue-ref)
+  "Link ISSUE-REF to the current task without creating a new issue."
+  (interactive (list (my/task--prompt-issue-reference)))
+  (save-excursion
+    (my/task--goto-task-root)
+    (let* ((metadata (my/task--collect-metadata))
+           (issue-data (my/task--normalize-issue-reference issue-ref)))
+      (setq metadata
+            (my/task--metadata-with-overrides
+             metadata
+             :gh_issue (plist-get issue-data :gh_issue)
+             :gh_url (or (plist-get issue-data :gh_url)
+                         (plist-get metadata :gh_url))))
+      (setq metadata (my/task--refresh-derived-metadata metadata))
+      (my/task--write-derived-properties metadata)
+      metadata)))
+
+;;;###autoload
+(defun my/task-init-from-branch (branch)
+  "Prepare the current task using an existing local BRANCH."
+  (interactive
+   (list
+    (save-excursion
+      (my/task--goto-task-root)
+      (my/task--prompt-branch (my/task--repo-path)))))
+  (save-excursion
+    (my/task--goto-task-root)
+    (let* ((metadata (my/task--collect-metadata))
+           (branch-slug (my/task--branch-slug branch)))
+      (unless (my/task--branch-exists-p (plist-get metadata :repo_path) branch)
+        (user-error "Branch does not exist in %s: %s"
+                    (plist-get metadata :repo_path)
+                    branch))
+      (setq metadata
+            (my/task--metadata-with-overrides
+             metadata
+             :branch branch
+             :branch_explicit branch
+             :workspace (or (plist-get metadata :workspace_explicit)
+                            (if (plist-get metadata :gh_issue)
+                                (my/task--derive-workspace
+                                 (plist-get metadata :repo_name)
+                                 (plist-get metadata :gh_issue)
+                                 (plist-get metadata :slug))
+                              (my/task--derive-workspace
+                               (plist-get metadata :repo_name)
+                               nil
+                               branch-slug)))
+             :worktree nil))
+      (setq metadata
+            (plist-put metadata :worktree
+                       (or (plist-get metadata :worktree_explicit)
+                           (my/task--derive-worktree
+                            (plist-get metadata :repo_path)
+                            (plist-get metadata :workspace)))))
+      (my/task--write-derived-properties metadata)
+      (my/task--open-with-metadata metadata))))
 
 ;;;###autoload
 (defun my/task-create ()
@@ -367,24 +511,7 @@ The stored value is always normalized to the repo root."
                                                  body-file)
                        metadata))
                 (setq metadata
-                      (plist-put metadata :workspace
-                                 (or (plist-get metadata :workspace_explicit)
-                                     (my/task--derive-workspace
-                                      (plist-get metadata :repo_name)
-                                      (plist-get metadata :gh_issue)
-                                      (plist-get metadata :slug))))
-                      metadata
-                      (plist-put metadata :branch
-                                 (or (plist-get metadata :branch_explicit)
-                                     (my/task--derive-branch
-                                      (plist-get metadata :gh_issue)
-                                      (plist-get metadata :slug))))
-                      metadata
-                      (plist-put metadata :worktree
-                                 (or (plist-get metadata :worktree_explicit)
-                                     (my/task--derive-worktree
-                                      (plist-get metadata :repo_path)
-                                      (plist-get metadata :workspace))))))
+                      (my/task--refresh-derived-metadata metadata)))
             (delete-file body-file))))
       (my/task--write-derived-properties metadata)))
   (my/task-open))

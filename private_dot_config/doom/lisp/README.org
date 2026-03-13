@@ -8,7 +8,7 @@ The newest addition is =my-task-workflow.el=, which adds a task-centric Org
 workflow for:
 
 - planning in Org
-- GitHub issue creation via =gh=
+- GitHub issue creation or linking via =gh=
 - per-task git worktrees
 - per-task Doom workspaces
 - resuming work from the Org task subtree
@@ -67,6 +67,21 @@ subtree; they climb to the nearest ancestor heading at that level.
 
 ** Main commands
 
+*** =M-x my/task-init=
+
+Use this when you want a local task environment without creating a new GitHub
+issue.
+
+It will:
+
+1. find the task root
+2. resolve =REPO_PATH= from the task, inherited Org properties, or an interactive prompt
+3. derive =BRANCH=, =WORKSPACE=, and =WORKTREE= if missing
+4. create or switch to the task workspace and worktree
+
+This is the right entry point for private config work or any task that should
+remain local for now.
+
 *** =M-x my/task-create=
 
 Use this when a task does not yet have a GitHub issue.
@@ -80,6 +95,34 @@ It will:
 5. store =GH_ISSUE= and =GH_URL=
 6. derive =BRANCH=, =WORKSPACE=, and =WORKTREE= if missing
 7. call =my/task-open=
+
+*** =M-x my/task-link-issue=
+
+Use this when the issue already exists on GitHub and you just want to attach it
+to the current Org task.
+
+It prompts for either:
+
+- an issue number
+- a full GitHub issue URL
+
+Then it stores =GH_ISSUE= and, if available, =GH_URL=. Existing branch,
+workspace, and worktree properties are preserved.
+
+*** =M-x my/task-init-from-branch=
+
+Use this when there is already a local branch and you want the task to take it
+over.
+
+It will:
+
+1. prompt for an existing local branch in the repo
+2. store that branch in =BRANCH=
+3. derive a workspace and worktree if needed
+4. open the task environment
+
+This is useful when a branch was started elsewhere and you want to bind it to an
+Org task after the fact.
 
 *** =M-x my/task-open=
 
@@ -142,6 +185,9 @@ The workflow reads and writes these Org properties on the task heading:
 - Doom workspaces are enabled
 - Magit is available
 - task planning happens in Org files, possibly outside the repository
+
+If a task is private or already has an issue elsewhere, use =my/task-init= or
+=my/task-link-issue= instead of =my/task-create=.
 
 * gptel Files
 

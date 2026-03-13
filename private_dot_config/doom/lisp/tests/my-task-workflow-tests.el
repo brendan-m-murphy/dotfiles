@@ -134,6 +134,85 @@
                            "issue-417-basis-operator-phase-1"))
             (should (equal (plist-get metadata :worktree) expected-worktree))))))))
 
+(ert-deftest my/task-init-writes-derived-properties-without-issue ()
+  (my/task-test--with-temp-dir repo
+    (let* ((repo-path (file-name-as-directory repo))
+           (repo-name (file-name-nondirectory (directory-file-name repo-path))))
+      (my/task-test--with-org-buffer
+          (concat "#+PROPERTY: REPO_PATH " repo-path "\n"
+                  (my/task-test--heading 1 "Repo")
+                  (my/task-test--heading my/task-heading-level "Basis operator phase 1")
+                  (my/task-test--heading (1+ my/task-heading-level) "Notes")
+                  "Some notes.\n")
+        (goto-char (point-max))
+        (cl-letf (((symbol-function 'my/task--git-root)
+                   (lambda (_path) repo-path))
+                  ((symbol-function 'my/task--open-with-metadata)
+                   (lambda (_metadata) nil)))
+          (my/task-init)
+          (my/task--goto-task-root)
+          (should (equal (my/task--get-property "REPO_PATH" nil) repo-path))
+          (should (equal (my/task--get-property "WORKSPACE" nil)
+                         (format "%s-task-basis-operator-phase-1" repo-name)))
+          (should (equal (my/task--get-property "BRANCH" nil)
+                         "basis-operator-phase-1"))
+          (should (equal (my/task--get-property "WORKTREE" nil)
+                         (expand-file-name
+                          (format "%s-task-basis-operator-phase-1" repo-name)
+                          (expand-file-name
+                           (format "%s-wt" repo-name)
+                           (file-name-directory (directory-file-name repo-path)))))))))))
+
+(ert-deftest my/task-link-issue-writes-gh-properties ()
+  (my/task-test--with-temp-dir repo
+    (let ((repo-path (file-name-as-directory repo)))
+      (my/task-test--with-org-buffer
+          (concat "#+PROPERTY: REPO_PATH " repo-path "\n"
+                  (my/task-test--heading 1 "Repo")
+                  (my/task-test--heading my/task-heading-level "Basis operator phase 1")
+                  ":PROPERTIES:\n:WORKSPACE: local-ws\n:BRANCH: local-branch\n:WORKTREE: /tmp/local-ws\n:END:\n")
+        (goto-char (point-max))
+        (cl-letf (((symbol-function 'my/task--git-root)
+                   (lambda (_path) repo-path)))
+          (my/task-link-issue "https://github.com/org/repo/issues/417")
+          (my/task--goto-task-root)
+          (should (equal (my/task--get-property "GH_ISSUE" nil) "417"))
+          (should (equal (my/task--get-property "GH_URL" nil)
+                         "https://github.com/org/repo/issues/417"))
+          (should (equal (my/task--get-property "WORKSPACE" nil) "local-ws"))
+          (should (equal (my/task--get-property "BRANCH" nil) "local-branch"))
+          (should (equal (my/task--get-property "WORKTREE" nil) "/tmp/local-ws")))))))
+
+(ert-deftest my/task-init-from-branch-writes-branch-based-properties ()
+  (my/task-test--with-temp-dir repo
+    (let* ((repo-path (file-name-as-directory repo))
+           (repo-name (file-name-nondirectory (directory-file-name repo-path))))
+      (my/task-test--with-org-buffer
+          (concat "#+PROPERTY: REPO_PATH " repo-path "\n"
+                  (my/task-test--heading 1 "Repo")
+                  (my/task-test--heading my/task-heading-level "Basis operator phase 1")
+                  (my/task-test--heading (1+ my/task-heading-level) "Notes")
+                  "Some notes.\n")
+        (goto-char (point-max))
+        (cl-letf (((symbol-function 'my/task--git-root)
+                   (lambda (_path) repo-path))
+                  ((symbol-function 'my/task--branch-exists-p)
+                   (lambda (_repo branch)
+                     (string-equal branch "feature/takeover")))
+                  ((symbol-function 'my/task--open-with-metadata)
+                   (lambda (_metadata) nil)))
+          (my/task-init-from-branch "feature/takeover")
+          (my/task--goto-task-root)
+          (should (equal (my/task--get-property "BRANCH" nil) "feature/takeover"))
+          (should (equal (my/task--get-property "WORKSPACE" nil)
+                         (format "%s-task-feature-takeover" repo-name)))
+          (should (equal (my/task--get-property "WORKTREE" nil)
+                         (expand-file-name
+                          (format "%s-task-feature-takeover" repo-name)
+                          (expand-file-name
+                           (format "%s-wt" repo-name)
+                           (file-name-directory (directory-file-name repo-path)))))))))))
+
 (ert-deftest my/task-ensure-worktree-creates-worktree-root-and-branch ()
   (let ((created-dir nil)
         (commands nil))

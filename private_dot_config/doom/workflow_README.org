@@ -158,8 +158,28 @@ The chosen depth scheme is the compromise that makes both work in the same file.
 2. Create a new =**= task heading under the appropriate =*= grouping.
 3. Add a =*** Notes= section describing the work.
 4. Optionally add more planning notes or prompt/response history.
-5. Run =M-x my/task-create= when you want to turn the task into an issue and a
-   working environment.
+5. Choose one of:
+   - =M-x my/task-init= for a local-only task
+   - =M-x my/task-link-issue= if the issue already exists
+   - =M-x my/task-create= if the issue does not exist yet
+
+*** =M-x my/task-init=
+
+Use this when you want a task-local workspace and worktree without creating a
+new issue.
+
+It will:
+
+- find the task heading
+- resolve the repo
+- derive =BRANCH=, =WORKTREE=, and =WORKSPACE= if needed
+- create or switch to the task workspace
+- open the worktree and Magit
+
+This is the right command for private configuration work or any task that should
+stay local.
+
+*** =M-x my/task-create=
 
 =my/task-create= will:
 
@@ -170,6 +190,31 @@ The chosen depth scheme is the compromise that makes both work in the same file.
 - store =GH_ISSUE= and =GH_URL=
 - derive =BRANCH=, =WORKTREE=, and =WORKSPACE= if needed
 - call =my/task-open=
+
+*** =M-x my/task-link-issue=
+
+Use this when the GitHub issue already exists and the task just needs to record
+it.
+
+It accepts either:
+
+- an issue number
+- a full issue URL
+
+Then it stores =GH_ISSUE= and, when available, =GH_URL=. Existing local branch,
+workspace, and worktree properties are left alone.
+
+*** =M-x my/task-init-from-branch=
+
+Use this when there is already a local branch and you want to bind the Org task
+to it.
+
+It will:
+
+- prompt for an existing branch
+- store it in =BRANCH=
+- derive =WORKSPACE= and =WORKTREE= if missing
+- open the task environment
 
 ** Reopening an existing task
 
@@ -196,8 +241,9 @@ names:
 - workspace: =<repo>-task-<slug>=
 - branch: =<slug>=
 
-Once an issue is created, the task can transition to the issue-based naming
-scheme.
+Once an issue is created or linked, the task can transition to the issue-based
+naming scheme. In the current implementation, existing branch/workspace/worktree
+properties are preserved rather than automatically renamed.
 
 * Workspaces and Worktrees
 
@@ -476,6 +522,14 @@ up the outline to the nearest ancestor at the configured task depth.
 Today, the default is:
 
 - =my/task-heading-level = 2=
+
+** Current task commands
+
+- =my/task-open=: reopen an existing task environment
+- =my/task-init=: create a local-only task environment
+- =my/task-create=: create a new issue and then open the task
+- =my/task-link-issue=: attach an existing issue to the task
+- =my/task-init-from-branch=: attach an existing local branch to the task
 
 That matches the current =**= task convention.
 
