@@ -814,3 +814,134 @@
        :desc "Open in Codex" "o" #'my/open-in-codex
        :desc "Cleanup merged worktree" "x" #'my/magit-cleanup-worktree
        :desc "Resolve merge (smerge)" "m" #'my/smerge-start))
+
+
+;;; -------------------------------------------------------
+;;; Flycheck on branch diff
+;;; -------------------------------------------------------
+
+(require 'magit)
+(require 'flycheck)
+(require 'seq)
+
+(defvar my/flycheck-diff-debug nil
+  "When non-nil, log debug messages for flycheck diff export.")
+
+(defun my/debug-log (fmt &rest args)
+  (when my/flycheck-diff-debug
+    (let ((msg (apply #'format fmt args)))
+      (message "%s" msg)
+      (with-current-buffer (get-buffer-create "*flycheck-diff-debug*")
+        (goto-char (point-max))
+        (insert msg "\n")))))
+
+(defun my/magit-changed-files (base)
+  (let ((files (magit-git-lines "diff" "--name-only" (format "%s..HEAD" base))))
+    (my/debug-log "Changed files vs %s: %S" base files)
+    files))
+
+(defun my/magit-hunk-ranges (file base)
+  "Return list of changed line ranges in FILE vs BASE."
+  (let ((lines (magit-git-lines "diff" "-U0" (format "%s..HEAD" base) "--" file))
+        ranges)
+
+    (dolist (line lines)
+      (when (string-match
+             "^@@ -[0-9]+\\(?:,[0-9]+\\)? +\\+\\([0-9]+\\)\\(?:,\\([0-9]+\\)\\)? @@"
+             line)
+
+        (let* ((start (string-to-number (match-string 1 line)))
+               (count (if (match-string 2 line)
+                          (string-to-number (match-string 2 line))
+                        1))
+               (end (+ start count -1)))
+
+          (push (cons start end) ranges))))
+
+    (my/debug-log "Ranges for %s: %S" file ranges)
+    ranges))
+
+(defun my/line-in-ranges-p (line ranges)
+  (seq-some
+   (lambda (r)
+     (and (>= line (car r))
+          (<= line (cdr r))))
+   ranges))
+
+(defun my/flycheck-errors-for-file (file)
+  (let ((buf (or (get-file-buffer file)
+                 (find-file-noselect file))))
+
+    (with-current-buffer buf
+
+      (unless flycheck-mode
+        (flycheck-mode 1))
+
+      (unless flycheck-current-errors
+        (flycheck-buffer)
+        (while (flycheck-running-p)
+          (accept-process-output nil 0.05)))
+
+      (my/debug-log
+       "Flycheck errors for %s: %s"
+       file
+       (length flycheck-current-errors))
+
+      flycheck-current-errors)))
+
+(defun my/flatten-message (msg)
+  "Convert multiline diagnostic messages to single line."
+  (replace-regexp-in-string "[\n\r]+[[:space:]]*" " " msg))
+
+(defun my/export-flycheck-diff-errors (base)
+  "Export Flycheck diagnostics occurring on lines changed vs BASE."
+  (interactive "sBase branch: ")
+
+  (when my/flycheck-diff-debug
+    (with-current-buffer (get-buffer-create "*flycheck-diff-debug*")
+      (erase-buffer)))
+
+  (let ((files (my/magit-changed-files base))
+        (out (get-buffer-create "*flycheck-diff-errors*"))
+        (total 0)
+        (kept 0))
+
+    (with-current-buffer out
+      (erase-buffer)
+      (insert "File\tLine\tCol\tLevel\tID\tMessage\tChecker\n\n"))
+
+    (dolist (file files)
+
+      (when (file-exists-p file)
+
+        (let* ((ranges (my/magit-hunk-ranges file base))
+               (errors (my/flycheck-errors-for-file file)))
+
+          (setq total (+ total (length errors)))
+
+          (dolist (err errors)
+
+            (let ((line (flycheck-error-line err)))
+
+              (when (and line (my/line-in-ranges-p line ranges))
+
+                (setq kept (1+ kept))
+
+                (with-current-buffer out
+                  (insert
+                   (format "%s\t%d\t%d\t%s\t%s\t%s\t%s\n"
+                           file
+                           line
+                           (or (flycheck-error-column err) 0)
+                           (symbol-name (flycheck-error-level err))
+                           (or (flycheck-error-id err) "")
+                           (my/flatten-message
+                            (flycheck-error-message err))
+                           (symbol-name
+                            (flycheck-error-checker err)))))))))))
+
+    (my/debug-log "Total diagnostics seen: %s" total)
+    (my/debug-log "Diagnostics after diff filtering: %s" kept)
+
+    ;; Only show the result buffer
+    (display-buffer out)))
