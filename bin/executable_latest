@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+usage() {
+    echo "Usage: latest [-c] [directory]" >&2
+    exit 1
+}
+
+use_ctime=false
+
+while getopts ":c" opt; do
+    case "$opt" in
+        c) use_ctime=true ;;
+        *) usage ;;
+    esac
+done
+shift $((OPTIND - 1))
+
+target="${1:-.}"
+
+# Detect stat flavor
+if stat --version >/dev/null 2>&1; then
+    # GNU stat (Linux)
+    if $use_ctime; then
+        stat_cmd() { stat -c '%W %n' "$1"; }  # birth time (0 if unavailable)
+    else
+        stat_cmd() { stat -c '%Y %n' "$1"; }  # mtime
+    fi
+else
+    # BSD stat (macOS)
+    if $use_ctime; then
+        stat_cmd() { stat -f '%SB %N' -t '%s' "$1"; }  # birth time (epoch)
+    else
+        stat_cmd() { stat -f '%Sm %N' -t '%s' "$1"; }  # mtime
+    fi
+fi
+
+# Collect timestamps
+result=$(
+    find "$target" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null \
+    | while IFS= read -r -d '' d; do
+        stat_cmd "$d"
+      done \
+    | sort -nr \
+    | head -n1 \
+    | cut -d' ' -f2-
+)
+
+if [[ -z "${result:-}" ]]; then
+    echo "No directories in $target" >&2
+    exit 1
+fi
+
+printf '%s\n' "$result"
