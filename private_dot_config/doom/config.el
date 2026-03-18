@@ -38,6 +38,9 @@
 ;; numbers are disabled. For relative line numbers, set this to `relative'.
 (setq display-line-numbers-type t)
 
+;; use loopback pinentry
+(setq epa-pinentry-mode 'loopback)
+
 ;; spacer window for wide monitor
 (defun my/create-left-side-window ()
   "Create a persistent 1/9 width window on the left."
