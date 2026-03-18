@@ -3,53 +3,156 @@
 set -euo pipefail
 
 usage() {
-    echo "Usage: latest [-c] [directory]" >&2
-    exit 1
+    cat <<'EOF'
+latest: print the most recent file or directory within a directory
+
+Usage:
+  latest [options] [directory]
+
+Options:
+  -c              Use creation (birth) time instead of modification time
+  -t {f|d|a}      Type filter:
+                    f = files only
+                    d = directories only
+                    a = all (default)
+  -p <pattern>    Glob pattern (passed to find -name)
+                  Example: 'run_*'
+  -k <N>          Return top N results (default: 1)
+  -s {time|name}  Sort mode:
+                    time = filesystem time (default)
+                    name = lexicographic (useful for timestamped names)
+  -h              Show this help message
+
+Arguments:
+  directory       Target directory (default: current directory)
+
+Examples:
+
+  # Basic: newest entry (file or directory) by mtime
+  latest runs
+
+  # Use with cd (quote to handle spaces)
+  cd "$(latest runs)"
+
+  # Newest directory only
+  latest -t d runs
+
+  # Newest file only
+  latest -t f runs
+
+  # Top 3 newest directories
+  latest -t d -k 3 runs
+
+  # Filter by name (glob)
+  latest -p 'run_*' runs
+
+  # Combine filtering + type
+  latest -t d -p 'run_*' runs
+
+  # Use creation (birth) time instead of mtime
+  latest -c runs
+
+  # Timestamped directories (recommended for HPC workflows)
+  # Sort by name rather than filesystem time
+  latest -t d -s name runs
+
+  # Top 5 timestamped runs
+  latest -t d -s name -k 5 runs
+
+Notes:
+
+  - Creation time (-c) may not be available on all Linux filesystems.
+    In such cases, results may be missing or unreliable.
+
+  - Name sorting (-s name) is deterministic if your directories use
+    lexicographically sortable timestamps (e.g. YYYY-MM-DD_HHMM).
+
+  - Output is newline-separated. When using with cd, ensure command
+    substitution is quoted:
+        cd "$(latest ...)"
+
+EOF
 }
 
 use_ctime=false
+type="a"
+pattern=""
+limit=1
+sort_mode="time"
 
-while getopts ":c" opt; do
+while getopts ":hct:p:k:s:" opt; do
     case "$opt" in
+        h) usage; exit 0 ;;
         c) use_ctime=true ;;
-        *) usage ;;
+        t)
+            case "$OPTARG" in
+                f|d|a) type="$OPTARG" ;;
+                *) usage; exit 1 ;;
+            esac
+            ;;
+        p) pattern="$OPTARG" ;;
+        k) limit="$OPTARG" ;;
+        s)
+            case "$OPTARG" in
+                time|name) sort_mode="$OPTARG" ;;
+                *) usage; exit 1 ;;
+            esac
+            ;;
+        *) usage; exit 1 ;;
     esac
 done
 shift $((OPTIND - 1))
 
 target="${1:-.}"
 
-# Detect stat flavor
-if stat --version >/dev/null 2>&1; then
-    # GNU stat (Linux)
-    if $use_ctime; then
-        stat_cmd() { stat -c '%W %n' "$1"; }  # birth time (0 if unavailable)
-    else
-        stat_cmd() { stat -c '%Y %n' "$1"; }  # mtime
-    fi
+case "$type" in
+    f) find_type=(-type f) ;;
+    d) find_type=(-type d) ;;
+    a) find_type=() ;;
+esac
+
+if [[ -n "$pattern" ]]; then
+    find_name=(-name "$pattern")
 else
-    # BSD stat (macOS)
-    if $use_ctime; then
-        stat_cmd() { stat -f '%SB %N' -t '%s' "$1"; }  # birth time (epoch)
-    else
-        stat_cmd() { stat -f '%Sm %N' -t '%s' "$1"; }  # mtime
-    fi
+    find_name=()
 fi
 
-# Collect timestamps
-result=$(
-    find "$target" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null \
-    | while IFS= read -r -d '' d; do
-        stat_cmd "$d"
-      done \
-    | sort -nr \
-    | head -n1 \
-    | cut -d' ' -f2-
+mapfile -d '' entries < <(
+    find "$target" -mindepth 1 -maxdepth 1 "${find_type[@]}" "${find_name[@]}" -print0 2>/dev/null
 )
 
-if [[ -z "${result:-}" ]]; then
-    echo "No directories in $target" >&2
+if [[ ${#entries[@]} -eq 0 ]]; then
+    echo "No matching entries in $target" >&2
     exit 1
 fi
 
-printf '%s\n' "$result"
+if [[ "$sort_mode" == "name" ]]; then
+    printf '%s\n' "${entries[@]}" \
+        | sort -r \
+        | head -n "$limit"
+    exit 0
+fi
+
+if stat --version >/dev/null 2>&1; then
+    if $use_ctime; then
+        stat_cmd() { stat -c '%W %n' "$1"; }
+    else
+        stat_cmd() { stat -c '%Y %n' "$1"; }
+    fi
+else
+    if $use_ctime; then
+        stat_cmd() { stat -f '%SB %N' -t '%s' "$1"; }
+    else
+        stat_cmd() { stat -f '%Sm %N' -t '%s' "$1"; }
+    fi
+fi
+
+{
+    for e in "${entries[@]}"; do
+        stat_cmd "$e"
+    done
+} \
+| awk '$1 > 0 { print }' \
+| sort -nr \
+| head -n "$limit" \
+| cut -d' ' -f2-
