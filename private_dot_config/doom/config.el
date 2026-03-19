@@ -491,6 +491,7 @@
 ;;; Local tools
 (add-to-list 'load-path (expand-file-name "lisp" doom-user-dir))
 (require 'my-gptel-tools)
+(require 'macher-custom)
 (require 'my-gptel-org-workflow)
 (require 'my-task-workflow)
 (defconst my/gptel-read-tool-names
