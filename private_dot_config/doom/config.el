@@ -56,45 +56,104 @@
 ;; If you use `org' and don't want your org files in the default location below,
 ;; change `org-directory'. It must be set before org loads!
 (setq org-directory "~/Documents/org/")
-(setq org-agenda-files (list (concat org-directory "todo.org")
-                             (concat org-directory "work/todo.org")
-                             (concat org-directory "meeting_notes.org")
-                             (concat org-directory "important_dates.org")
-                             (concat org-directory "renovation.org")
-                             (concat org-directory "home.org")
-                             (concat org-directory "work/")
-                             (concat org-directory "projects/")
-                             ))
 
-;; remove archive
-(setq org-agenda-files (remove (concat org-directory "archive/") org-agenda-files))
+;; Keep the agenda focused on active task files and a few practical support
+;; files. This should make the agenda more trustworthy and less noisy than
+;; scanning whole directories like work/ or projects/.
+(setq org-agenda-files
+      (list (concat org-directory "inbox.org")
+            (concat org-directory "todo.org")
+            (concat org-directory "notes.org")
+            (concat org-directory "journal.org")
+            (concat org-directory "home.org")
+            (concat org-directory "work/todo.org")
+            (concat org-directory "work/meeting_notes.org")
+            (concat org-directory "home/important_dates.org")
+            (concat org-directory "home/renovation.org")))
 
+;; Refile is central to processing inbox items. Keep `C-c C-w' bound explicitly.
 (map! :after org
       "C-c C-w" #'org-refile)
 
+;; Refile targets are intentionally narrower than "all Org files everywhere".
+;; The aim is to make common destinations easy to reach without turning refile
+;; into a huge completion list.
 (setq org-refile-targets
-      `((nil . (:maxlevel . 6))
-        (org-agenda-files . (:maxlevel . 3))
-        (,(directory-files (concat org-directory "work/") 'full (rx ".org" eos)) . (:maxlevel . 3))
-        ))
+      `((nil . (:maxlevel . 4))
+        (,(list (concat org-directory "todo.org")
+                (concat org-directory "work/todo.org")
+                (concat org-directory "notes.org")
+                (concat org-directory "home.org"))
+         . (:maxlevel . 3))
+        (,(directory-files (concat org-directory "repo-plans/") t (rx ".org" eos))
+         . (:maxlevel . 3))
+        (,(directory-files (concat org-directory "projects/") t (rx ".org" eos))
+         . (:maxlevel . 3))
+        (,(list (concat org-directory "work/meeting_notes.org"))
+         . (:maxlevel . 3))))
+
 (setq org-refile-use-outline-path 'file)
 (setq org-outline-path-complete-in-steps nil)
 (setq org-refile-allow-creating-parent-nodes 'confirm)
 
-;; todo states
+;; Keep your existing TODO vocabulary. The important workflow rule is that
+;; PROJ headings should usually have child TODO items beneath them.
 (setq org-todo-keywords
-      '((sequence "TODO(t)" "PROJ(p)" "WAIT(w)" "HOLD(h)" "IDEA(i)" "SOMEDAY(s)" "|" "DONE(d)" "CANCELLED(c)" )
+      '((sequence "TODO(t)" "PROJ(p)" "WAIT(w)" "HOLD(h)" "IDEA(i)" "SOMEDAY(s)"
+                  "|" "DONE(d)" "CANCELLED(c)")
         (sequence "[ ](T)" "[-](S)" "[?](W)" "|" "[X](D)")))
 
-;; previous value:
-;; ((sequence "TODO(t)" "PROJ(p)" "LOOP(r)" "STRT(s)" "WAIT(w)" "HOLD(h)" "IDEA(i)" "|" "DONE(d)" "KILL(k)")
-;;  (sequence "[ ](T)" "[-](S)" "[?](W)" "|" "[X](D)")
-;;  (sequence "|" "OKAY(o)" "YES(y)" "NO(n)"))
+;; Archive completed/stale subtrees into a sibling archive file. This keeps
+;; active files shorter without deleting history.
+;;
+;; Example:
+;;   ~/Documents/org/todo.org
+;; becomes
+;;   ~/Documents/org/todo.org_archive
+(setq org-archive-location "%s_archive::")
 
+;; Record when captured items were created. This is especially useful for
+;; reviewing stale tasks later.
+(setq org-log-into-drawer t)
+
+;; Capture defaults:
+;; - "t": quick inbox task (default destination for most captured tasks)
+;; - "w": direct work task when the destination is already obvious
+;; - "h": direct personal/home task when the destination is already obvious
+;; - "n": general note capture to notes.org
+;; - "m": general work meeting note
+;; - "j": journal entry
+;;
+;; Tasks use a CREATED property rather than body text so creation time is easy
+;; to keep, search, and review without cluttering headings.
+(setq org-capture-templates
+      `(("t" "Inbox task" entry
+         (file+headline ,(concat org-directory "inbox.org") "Inbox")
+         "* TODO %?\n:PROPERTIES:\n:CREATED: %U\n:END:\n")
+
+        ("w" "Work task" entry
+         (file+headline ,(concat org-directory "work/todo.org") "Inbox")
+         "* TODO %?\n:PROPERTIES:\n:CREATED: %U\n:END:\n")
+
+        ("h" "Home/personal task" entry
+         (file+headline ,(concat org-directory "todo.org") "Inbox")
+         "* TODO %?\n:PROPERTIES:\n:CREATED: %U\n:END:\n")
+
+        ("n" "Note" entry
+         (file+headline ,(concat org-directory "notes.org") "Inbox")
+         "* %?\n:PROPERTIES:\n:CREATED: %U\n:END:\n")
+
+        ("m" "Work meeting note" entry
+         (file+headline ,(concat org-directory "work/meeting_notes.org") "Inbox")
+         "* %U %?\n")
+
+        ("j" "Journal entry" entry
+         (file+olp+datetree ,(concat org-directory "journal.org"))
+         "* %U %?\n")))
 
 ;; org github links
-(use-package! org-gh
-  :after org)
+;; (use-package! org-gh
+;;   :after org)
 
 
 ;; BASIC CONFIG
