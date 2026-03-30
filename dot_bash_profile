@@ -35,4 +35,7 @@ unset __mamba_setup
 
 # Added by `rbenv init` on Thu Mar 27 20:41:42 GMT 2025
 eval "$(rbenv init - --no-rehash bash)"
-alias newemacs='open -n -a "/opt/homebrew/opt/emacs-plus@30/Emacs.app"'
+
+
+# llm cli config
+export LLM_MODEL=gpt-5-mini
