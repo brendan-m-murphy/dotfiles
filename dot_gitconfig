@@ -3,3 +3,9 @@
 	email = brendan.murphy@bristol.ac.uk
 [ini]
 	defaultBranch = main
+[github]
+	user = brendan-m-murphy
+[core]
+	excludesFile = ~/.gitignore
+[push]
+	default = current
