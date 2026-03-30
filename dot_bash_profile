@@ -37,9 +37,11 @@ unset __mamba_setup
 # Added by `rbenv init` on Thu Mar 27 20:41:42 GMT 2025
 eval "$(rbenv init - --no-rehash bash)"
 
-
 # llm cli config
 export LLM_MODEL=gpt-5-mini
+
+# direnv
+eval "$(direnv hook bash)"
 
 # Source .bashrc if it exists
 if [ -f "$HOME/.bashrc" ]; then
