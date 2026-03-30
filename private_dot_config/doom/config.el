@@ -1007,3 +1007,7 @@
 
     ;; Only show the result buffer
     (display-buffer out)))
+
+
+;; chezmoi
+(use-package! chezmoi)
