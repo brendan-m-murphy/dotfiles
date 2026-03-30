@@ -114,3 +114,7 @@
 
 ;; mcp
 (package! mcp)
+
+
+;; chezmoi
+(package! chezmoi)
