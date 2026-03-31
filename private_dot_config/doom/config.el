@@ -1011,3 +1011,90 @@
 
 ;; chezmoi
 (use-package! chezmoi)
+
+
+;; bibliography
+(defvar my/bibdesk-library-root
+  "~/Library/CloudStorage/Dropbox/")
+
+(setq org-cite-global-bibliography
+      (list (expand-file-name "acrg_library.bib" my/bibdesk-library-root)))
+
+
+;; bibdesk open pdf helper
+
+;;; get cite key at point
+(defun my/org-cite-get-key-at-point ()
+  "Return the citekey at point."
+  (let ((context (org-element-context)))
+    (pcase (org-element-type context)
+      ('citation-reference
+       (org-element-property :key context))
+      ('citation
+       (let ((refs (org-element-property :references context)))
+         (when refs
+           (org-element-property :key (car refs)))))
+      (_
+       (let ((citation (org-element-lineage context '(citation-reference citation) t)))
+         (pcase (and citation (org-element-type citation))
+           ('citation-reference
+            (org-element-property :key citation))
+           ('citation
+            (let ((refs (org-element-property :references citation)))
+              (when refs
+                (org-element-property :key (car refs)))))))))))
+
+;;; extracting file path from bibdesk
+(defun my/bibdesk-relative-path-from-bdsk (b64)
+  "Extract relativePath from BibDesk Bdsk-File base64 string."
+  (with-temp-buffer
+    (insert (base64-decode-string b64))
+    (call-process-region (point-min) (point-max)
+                         "plutil" t t nil
+                         "-convert" "xml1" "-o" "-" "-")
+    (goto-char (point-min))
+    (when (re-search-forward
+           "<key>relativePath</key>\\s-*<string>\\([^<]+\\)</string>" nil t)
+      (match-string 1))))
+
+(defun my/bibdesk-pdf-path (b64)
+  (let ((rel (my/bibdesk-relative-path-from-bdsk b64)))
+    (when rel
+      (expand-file-name rel my/bibdesk-library-root))))
+
+;;; get Bdsk-File-1 (base64 string with .pdf file location)
+(defun my/bibtex-get-field-by-key (key bibfile field)
+  "Return FIELD from BibTeX entry KEY in BIBFILE."
+  (with-temp-buffer
+    (insert-file-contents bibfile)
+    (bibtex-mode)
+    (goto-char (point-min))
+    (when (re-search-forward
+           (format "@[[:alpha:]]+[{(][[:space:]\n]*%s[[:space:]\n]*,"
+                   (regexp-quote key))
+           nil t)
+      (bibtex-beginning-of-entry)
+      (let ((parsed (bibtex-parse-entry t)))
+        (or (cdr (assoc field parsed))
+            (cdr (assoc (downcase field) parsed)))))))
+
+;;; interactive function
+(defun my/org-open-bibdesk-pdf ()
+  (interactive)
+  (let* ((key (my/org-cite-get-key-at-point))
+         (bib (car org-cite-global-bibliography))
+         (b64 (and key bib (my/bibtex-get-field-by-key key bib "Bdsk-File-1")))
+         (path (and b64 (my/bibdesk-pdf-path b64))))
+    (cond
+     ((null key)
+      (message "No citation at point"))
+     ((null bib)
+      (message "No bibliography configured"))
+     ((null b64)
+      (message "No Bdsk-File-1 field for %s" key))
+     ((null path)
+      (message "Could not decode BibDesk path for %s" key))
+     ((not (file-exists-p path))
+      (message "Resolved path does not exist: %s" path))
+     (t
+      (find-file path)))))
