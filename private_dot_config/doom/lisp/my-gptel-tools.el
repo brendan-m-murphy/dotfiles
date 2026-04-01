@@ -576,7 +576,7 @@ If DIR is inside a git repo, use the repo root as the write root."
 
 (defun my/gptel-tool-search-buffer (&rest args)
   "Search relevant buffers for PATTERN using ARGS."
-  (setq args (my/gptel--args->plist args '("buffer" "pattern" "context")))
+  (setq args (my/gptel--args->plist args '("pattern" "buffer" "context")))
   (let* ((pattern (or (plist-get args :pattern)
                       (user-error "Missing :pattern")))
          (context (max 0 (or (plist-get args :context) 0)))
