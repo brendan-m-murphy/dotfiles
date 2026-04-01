@@ -674,6 +674,37 @@
      chars low high cost-lines)))
 
 
+;;; --- gptel log management ----------------------------------------
+(defvar my/gptel-log-archive-dir
+  (expand-file-name "gptel/" doom-cache-dir)
+  "Directory where archived gptel logs are stored.")
+
+(defun my/gptel-log-buffer ()
+  "Return the gptel log buffer, or nil if it does not exist."
+  (get-buffer "*gptel-log*"))
+
+(defun my/gptel-log-archive-file ()
+  "Return today's archive file path for gptel logs."
+  (expand-file-name
+   (format-time-string "gptel-log-%Y-%m-%d.log")
+   my/gptel-log-archive-dir))
+
+(defun my/gptel-archive-and-clear-log ()
+  "Append `*gptel-log*` to today's archive file, then clear the buffer."
+  (interactive)
+  (let ((buf (my/gptel-log-buffer)))
+    (unless buf
+      (user-error "No *gptel-log* buffer exists"))
+    (make-directory my/gptel-log-archive-dir t)
+    (with-current-buffer buf
+      (when (> (buffer-size) 0)
+        (append-to-file (point-min) (point-max) (my/gptel-log-archive-file))
+        (erase-buffer)
+        (set-buffer-modified-p nil)))
+    (message "Archived and cleared *gptel-log* -> %s"
+             (my/gptel-log-archive-file))))
+
+
 ;; ---------------------------------------------------------------------------
 ;; Magit config
 ;; ---------------------------------------------------------------------------
