@@ -155,6 +155,34 @@
 ;; (use-package! org-gh
 ;;   :after org)
 
+;; stop huge org-babel results blocks
+(defcustom my/org-babel-max-result-chars 50000
+  "Maximum characters allowed in a single Org babel results block."
+  :type 'integer)
+
+(defun my/org-babel-truncate-result-maybe (&rest _)
+  "Truncate the most recent Org babel result block if it is too large."
+  (when (derived-mode-p 'org-mode)
+    (save-excursion
+      (when-let ((result-beg (org-babel-where-is-src-block-result)))
+        (goto-char result-beg)
+        (forward-line 1)
+        (let ((content-beg (point))
+              (result-end
+               (or (save-excursion
+                     (when (re-search-forward "^[ \t]*#\\+\\(begin_\\|end_\\|RESULTS:\\|NAME:\\|HEADER:\\)" nil t)
+                       (match-beginning 0)))
+                   (save-excursion
+                     (outline-next-heading)
+                     (point))
+                   (point-max))))
+          (when (> (- result-end content-beg) my/org-babel-max-result-chars)
+            (goto-char (+ content-beg my/org-babel-max-result-chars))
+            (delete-region (point) result-end)
+            (insert "\n... [org-babel result truncated]\n")))))))
+
+(advice-add 'org-babel-insert-result :after #'my/org-babel-truncate-result-maybe)
+
 
 ;; BASIC CONFIG
 (setq doom-font-increment 1)
@@ -319,7 +347,8 @@
     nil))
 
 (after! jupyter
-  (advice-add 'jupyter-org--define-key-filter :around #'my-jupyter-org--define-key-filter))
+  (advice-add 'jupyter-org--define-key-filter :around #'my-jupyter-org--define-key-filter)
+  (setq jupyter-repl-maximum-output 5000))
 
 ;; MAGIT
 
