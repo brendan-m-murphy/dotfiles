@@ -149,7 +149,6 @@ def clean_soup_for_markdown(soup: BeautifulSoup) -> None:
         "[class*='CopyToClipboardButton-module']",
         "[class*='LanguageDot-module']",
         "[class*='octicon']",
-        "[class='']",
     ]
     for selector in selectors:
         for node in soup.select(selector):
@@ -161,9 +160,50 @@ def clean_soup_for_markdown(soup: BeautifulSoup) -> None:
                 del tag.attrs[attr]
 
 
+def debug_fragment(label: str, value: str) -> None:
+    path = Path("/tmp") / f"safari_copilot_debug_{label}.txt"
+    path.write_text(value, encoding="utf-8")
+
+
 def html_fragment_to_markdown(html: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
     clean_soup_for_markdown(soup)
+
+    if "Legacy builder" in html and "CodeBlock-module" in html:
+        debug_fragment("02_cleaned_html", str(soup))
+
+    # Convert embedded code/figure blocks to fenced markdown before markdownify.
+    for i, figure in enumerate(soup.find_all("figure")):
+        classes = " ".join(figure.get("class", []))
+
+        if "CodeBlock-module" not in classes and "ToolCodeBlock-module" not in classes:
+            continue
+
+        code_text = extract_code_text(str(figure))
+        if "Legacy builder" in html:
+            debug_fragment(f"03_figure_{i}_html", str(figure))
+            debug_fragment(f"04_figure_{i}_code_text", code_text)
+        if not code_text.strip():
+            continue
+
+        language = infer_code_language(str(figure), code_text)
+
+        replacement = soup.new_string(f"\n```{language}\n{code_text}\n```\n")
+        figure.replace_with(replacement)
+
+    # Also handle bare <pre> blocks that are not wrapped in <figure>.
+    for pre in soup.find_all("pre"):
+        code_text = pre.get_text("\n", strip=False).replace("\u00a0", " ").rstrip()
+        if not code_text.strip():
+            continue
+
+        language = "text"
+        parent = pre.find_parent()
+        if parent is not None:
+            language = infer_code_language(str(parent), code_text)
+
+        replacement = soup.new_string(f"\n```{language}\n{code_text}\n```\n")
+        pre.replace_with(replacement)
 
     rendered = md(
         str(soup),
@@ -173,6 +213,8 @@ def html_fragment_to_markdown(html: str) -> str:
     )
     rendered = unescape(rendered)
     rendered = rendered.replace("\u00a0", " ")
+
+    # Clean up excessive blank lines around fenced blocks.
     rendered = re.sub(r"\n{3,}", "\n\n", rendered).strip()
     return rendered
 
@@ -211,6 +253,26 @@ def json_summary(obj: object) -> str:
 def infer_code_language(html: str, text: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
 
+    # GitHub-style visible language label
+    for span in soup.find_all("span"):
+        classes = " ".join(span.get("class", []))
+        if "languageName" in classes:
+            label = span.get_text(" ", strip=True).lower()
+            if label:
+                return {
+                    "python": "python",
+                    "py": "python",
+                    "shell": "bash",
+                    "sh": "bash",
+                    "javascript": "javascript",
+                    "json": "json",
+                    "yaml": "yaml",
+                    "yml": "yaml",
+                    "text": "text",
+                    "plaintext": "text",
+                }.get(label, label)
+
+    # language-* classes
     for tag in soup.find_all(True, class_=True):
         classes = tag.get("class", [])
         for cls in classes:
