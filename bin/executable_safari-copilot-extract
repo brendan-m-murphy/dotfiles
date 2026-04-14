@@ -8,27 +8,33 @@
 # ///
 
 """
-Extract a GitHub Copilot chat transcript from the active Safari tab.
+Extract GitHub Copilot chat content from the active Safari tab.
 
-This version uses a simple state machine over the flattened AppleScript output:
-- plain <p> blocks are semantic anchors
-- ToolCodeBlock figure blocks are tool/log blocks
-- <p> blocks whose text starts with [ or { are treated as JSON-like tool results
-- prose blocks like "Now let me..." are assistant worklog/progress notes
-- prose blocks like "I now have..." and "Updated timeline..." are treated as
-  assistant final responses
-- the first prose block is treated as the initial user prompt
-- the first prose block after an assistant final is treated as a new user prompt
+This script uses the original working AppleScript pattern:
 
-The goal is not perfect DOM reconstruction. It is to produce a useful markdown
-transcript with stable enough structure for later cleanup.
+    document.querySelectorAll('[data-copilot-markdown="true"]')
+
+and assumes the returned JSON is a flat ordered stream of rendered fragments.
+Those fragments may include normal prose (<p>...) and code/tool figures
+(<figure class="ToolCodeBlock-module..."> / <figure class="CodeBlock-module...">).
+
+The parser does not try to reconstruct exact DOM hierarchy. Instead, it:
+
+- reads the JSON array from Safari
+- classifies each fragment by its HTML
+- converts prose fragments to markdown
+- converts figure/code fragments to fenced code blocks
+- groups consecutive fragments of the same broad type
+- can omit, summarize, or fully emit tool/code output
+- can write full tool/code output to a separate file
 
 Examples
 --------
-python safari_copilot_transcript.py
-python safari_copilot_transcript.py --stdout
-python safari_copilot_transcript.py --output copilot_chat.md
-python safari_copilot_transcript.py --raw-json copilot_dom.json
+python safari_copilot_extract.py
+python safari_copilot_extract.py --stdout
+python safari_copilot_extract.py --output copilot_chat.md
+python safari_copilot_extract.py --tool-mode omit
+python safari_copilot_extract.py --tool-mode summary --tool-output-file copilot_tools.md
 """
 
 from __future__ import annotations
@@ -38,10 +44,11 @@ import json
 import re
 import subprocess
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from html import unescape
 from pathlib import Path
-from typing import Any
+from typing import Literal
+
 
 from bs4 import BeautifulSoup
 from markdownify import markdownify as md
@@ -49,34 +56,22 @@ from markdownify import markdownify as md
 
 APPLE_SCRIPT = r'''
 tell application "Safari"
-    if not (exists front document) then error "No Safari document open"
-
     set js to "
 (() => {
-  const main = document.querySelector('main') || document.body;
-
-  const selector =
-    '[data-copilot-markdown=\"true\"], ' +
-    'figure[class*=\"ToolCodeBlock-module\"], ' +
-    'figure[class*=\"CodeBlock-module\"]';
-
-  const blocks = Array.from(main.querySelectorAll(selector)).map((el, i) => ({
+  const nodes = Array.from(document.querySelectorAll('[data-copilot-markdown=\"true\"]'));
+  return JSON.stringify(nodes.map((el, i) => ({
     index: i,
-    html: el.outerHTML,
-    text: (el.innerText || '').replace(/\u00a0/g, ' ').trim()
-  }));
-
-  return JSON.stringify({
-    url: location.href,
-    title: document.title,
-    blocks
-  });
+    html: el.innerHTML,
+    text: el.innerText
+  })));
 })();
 "
-    set raw_result to do JavaScript js in current tab of front window
-    return raw_result
+    return do JavaScript js in current tab of front window
 end tell
 '''
+
+
+Kind = Literal["message", "tool", "code", "other"]
 
 
 @dataclass
@@ -84,19 +79,19 @@ class Block:
     index: int
     html: str
     text: str
+    kind: Kind
 
 
 @dataclass
-class Message:
-    role: str
-    intro_blocks: list[Block] = field(default_factory=list)
-    tool_blocks: list[Block] = field(default_factory=list)
-    final_blocks: list[Block] = field(default_factory=list)
+class Group:
+    kind: Kind
+    blocks: list[Block]
 
 
 def run_osascript(script: str) -> str:
     result = subprocess.run(
-        ["osascript", "-e", script],
+        ["osascript", "-"],
+        input=script,
         capture_output=True,
         text=True,
         check=False,
@@ -107,76 +102,46 @@ def run_osascript(script: str) -> str:
     return result.stdout
 
 
-def starts_with_tag(html: str, tag: str) -> bool:
-    return html.lstrip().startswith(f"<{tag}")
+def classify_html(html: str) -> Kind:
+    h = html.lstrip()
 
+    if h.startswith("<figure") and "ToolCodeBlock-module" in h:
+        return "tool"
 
-def is_tool_figure(block: Block) -> bool:
-    return starts_with_tag(block.html, "figure") and (
-        "ToolCodeBlock-module" in block.html or "CodeBlock-module" in block.html
-    )
+    if h.startswith("<figure") and "CodeBlock-module" in h:
+        return "code"
 
-
-def is_jsonish_text(text: str) -> bool:
-    t = text.lstrip()
-    return t.startswith("[") or t.startswith("{")
-
-
-def is_tool_result_json(block: Block) -> bool:
-    return starts_with_tag(block.html, "p") and is_jsonish_text(block.text)
-
-
-def is_worklog_text(text: str) -> bool:
-    t = text.strip()
-    patterns = [
-        r"^This is a research/analysis task",
-        r"^Now let me\b",
-        r"^Now I have enough context\b",
-        r"^Let me do a careful\b",
-        r"^I need to investigate\b",
-        r"^First,?\b",
-        r"^Next,?\b",
-    ]
-    return any(re.match(p, t) for p in patterns)
-
-
-def is_final_answer_text(text: str) -> bool:
-    t = text.strip()
-    patterns = [
-        r"^I now have\b",
-        r"^Updated timeline\b",
-        r"^Here is\b",
-        r"^Based on\b",
-        r"^Research Summary\b",
-    ]
-    return any(re.match(p, t) for p in patterns)
-
-
-def classify_block(block: Block, seen_user: bool, previous_kind: str | None) -> str:
-    if is_tool_figure(block):
-        return "tool_block"
-
-    if is_tool_result_json(block):
-        return "tool_result_json"
-
-    if starts_with_tag(block.html, "p"):
-        if not seen_user:
-            return "user_message"
-        if is_worklog_text(block.text):
-            return "assistant_worklog"
-        if is_final_answer_text(block.text):
-            return "assistant_final"
-        if previous_kind == "assistant_final":
-            return "user_message"
-        return "assistant_worklog"
+    if h.startswith("<p") or h.startswith("<div") or h.startswith("<ul") or h.startswith("<ol") or h.startswith("<h"):
+        return "message"
 
     return "other"
 
 
-def html_fragment_to_markdown(html: str) -> str:
-    soup = BeautifulSoup(html, "html.parser")
+def parse_blocks(raw_items: list[dict[str, object]]) -> list[Block]:
+    blocks: list[Block] = []
+    for item in raw_items:
+        html = str(item.get("html", ""))
+        text = str(item.get("text", ""))
+        index = int(item.get("index", len(blocks)))
+        blocks.append(
+            Block(
+                index=index,
+                html=html,
+                text=text,
+                kind=classify_html(html),
+            )
+        )
+    blocks.sort(key=lambda b: b.index)
+    return blocks
 
-    for selector in [
+
+def collapse_whitespace(text: str) -> str:
+    text = text.replace("\u00a0", " ")
+    return re.sub(r"[ \t]+", " ", text)
+
+
+def clean_soup_for_markdown(soup: BeautifulSoup) -> None:
+    selectors = [
         "button",
         "svg",
         "[aria-hidden='true']",
@@ -184,7 +149,9 @@ def html_fragment_to_markdown(html: str) -> str:
         "[class*='CopyToClipboardButton-module']",
         "[class*='LanguageDot-module']",
         "[class*='octicon']",
-    ]:
+        "[class='']",
+    ]
+    for selector in selectors:
         for node in soup.select(selector):
             node.decompose()
 
@@ -193,6 +160,11 @@ def html_fragment_to_markdown(html: str) -> str:
             if attr in {"style", "data-testid", "node"}:
                 del tag.attrs[attr]
 
+
+def html_fragment_to_markdown(html: str) -> str:
+    soup = BeautifulSoup(html, "html.parser")
+    clean_soup_for_markdown(soup)
+
     rendered = md(
         str(soup),
         heading_style="ATX",
@@ -200,167 +172,239 @@ def html_fragment_to_markdown(html: str) -> str:
         strip=["span"],
     )
     rendered = unescape(rendered)
+    rendered = rendered.replace("\u00a0", " ")
     rendered = re.sub(r"\n{3,}", "\n\n", rendered).strip()
     return rendered
 
 
-def extract_text_from_block(block: Block) -> str:
-    html = block.html.strip()
-
-    if starts_with_tag(html, "figure"):
-        soup = BeautifulSoup(html, "html.parser")
-        code = soup.find("code")
-        pre = soup.find("pre")
-        node = code or pre or soup
-        return node.get_text("\n", strip=True).strip()
-
-    return html_fragment_to_markdown(html)
+def looks_like_json(text: str) -> bool:
+    s = text.strip()
+    return s.startswith("{") or s.startswith("[")
 
 
-def infer_code_language(block: Block) -> str:
-    html = block.html
+def try_parse_json(text: str) -> object | None:
+    try:
+        return json.loads(text)
+    except Exception:
+        return None
 
-    m = re.search(r'class="([^"]*language-[^"]*)"', html, flags=re.IGNORECASE)
-    if m:
-        classes = m.group(1).split()
+
+def json_summary(obj: object) -> str:
+    if isinstance(obj, list):
+        if not obj:
+            return "empty JSON list"
+        first = obj[0]
+        if isinstance(first, dict):
+            keys = sorted(first.keys())
+            preview_keys = ", ".join(keys[:8])
+            return f"JSON list with {len(obj)} item(s); first item keys: {preview_keys}"
+        return f"JSON list with {len(obj)} item(s)"
+
+    if isinstance(obj, dict):
+        keys = sorted(obj.keys())
+        preview_keys = ", ".join(keys[:12])
+        return f"JSON object with keys: {preview_keys}"
+
+    return f"JSON value of type {type(obj).__name__}"
+
+
+def infer_code_language(html: str, text: str) -> str:
+    soup = BeautifulSoup(html, "html.parser")
+
+    for tag in soup.find_all(True, class_=True):
+        classes = tag.get("class", [])
         for cls in classes:
             if cls.startswith("language-"):
                 return cls.removeprefix("language-").replace("shell", "bash")
 
-    text = block.text.strip()
-    if is_jsonish_text(text):
+    stripped = text.strip()
+    if stripped.startswith("{") or stripped.startswith("["):
         try:
-            json.loads(text)
+            json.loads(stripped)
             return "json"
         except Exception:
-            return "text"
+            pass
 
     return "text"
 
 
-def parse_blocks(raw_blocks: list[dict[str, Any]]) -> list[Block]:
-    blocks: list[Block] = []
-    for item in raw_blocks:
-        blocks.append(
-            Block(
-                index=int(item["index"]),
-                html=str(item["html"]),
-                text=str(item["text"]),
-            )
-        )
-    blocks.sort(key=lambda b: b.index)
-    return blocks
+def extract_code_text(html: str) -> str:
+    soup = BeautifulSoup(html, "html.parser")
+    clean_soup_for_markdown(soup)
+
+    code = soup.find("code")
+    if code is not None:
+        text = code.get_text("\n", strip=False)
+    else:
+        pre = soup.find("pre")
+        if pre is not None:
+            text = pre.get_text("\n", strip=False)
+        else:
+            text = soup.get_text("\n", strip=False)
+
+    text = text.replace("\u00a0", " ")
+    return text.rstrip()
 
 
-def build_messages(blocks: list[Block]) -> list[Message]:
-    messages: list[Message] = []
+def summarize_tool_text(text: str, html: str) -> str:
+    del html  # reserved for future use
 
-    current_user: Message | None = None
-    current_assistant: Message | None = None
+    stripped = text.strip()
+    if not stripped:
+        return "Empty tool output"
 
-    seen_user = False
-    previous_kind: str | None = None
+    obj = try_parse_json(stripped) if looks_like_json(stripped) else None
+    if obj is not None:
+        return json_summary(obj)
 
-    def ensure_assistant() -> Message:
-        nonlocal current_assistant
-        if current_assistant is None:
-            current_assistant = Message(role="assistant")
-            messages.append(current_assistant)
-        return current_assistant
+    lines = [re.sub(r"\s+", " ", line.strip()) for line in stripped.splitlines() if line.strip()]
+    if not lines:
+        return "Empty tool output"
+
+    first = lines[0]
+    if len(first) > 140:
+        first = first[:137] + "..."
+    return first
+
+
+def normalize_tool_payload(text: str) -> str:
+    stripped = text.strip()
+
+    obj = try_parse_json(stripped) if looks_like_json(stripped) else None
+    if obj is not None:
+        return json.dumps(obj, indent=2, ensure_ascii=False)
+
+    return stripped
+
+
+def group_blocks(blocks: list[Block]) -> list[Group]:
+    groups: list[Group] = []
 
     for block in blocks:
-        kind = classify_block(block, seen_user=seen_user, previous_kind=previous_kind)
+        broad_kind: Kind
+        if block.kind in {"tool", "code"}:
+            broad_kind = block.kind
+        elif block.kind == "message":
+            broad_kind = "message"
+        else:
+            broad_kind = "other"
 
-        if kind == "user_message":
-            current_user = Message(role="user", intro_blocks=[block])
-            messages.append(current_user)
-            current_assistant = None
-            seen_user = True
+        if groups and groups[-1].kind == broad_kind:
+            groups[-1].blocks.append(block)
+        else:
+            groups.append(Group(kind=broad_kind, blocks=[block]))
 
-        elif kind == "assistant_worklog":
-            assistant = ensure_assistant()
-            assistant.intro_blocks.append(block)
+    return groups
 
-        elif kind == "assistant_final":
-            assistant = ensure_assistant()
-            assistant.final_blocks.append(block)
 
-        elif kind in {"tool_block", "tool_result_json"}:
-            assistant = ensure_assistant()
-            assistant.tool_blocks.append(block)
+def render_message_group(group: Group) -> str:
+    rendered_parts: list[str] = []
+
+    for block in group.blocks:
+        rendered = html_fragment_to_markdown(block.html)
+        if rendered:
+            rendered_parts.append(rendered)
+
+    text = "\n\n".join(part for part in rendered_parts if part.strip())
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    return text
+
+
+def render_tool_group_summary(group: Group, heading: str) -> str:
+    parts = [f"## {heading}"]
+
+    for i, block in enumerate(group.blocks, start=1):
+        summary = summarize_tool_text(extract_code_text(block.html), block.html)
+        parts.append(f"{i}. {summary}")
+
+    return "\n\n".join(parts).strip()
+
+
+def render_tool_group_full(group: Group, heading: str) -> str:
+    parts = [f"## {heading}"]
+
+    for block in group.blocks:
+        language = infer_code_language(block.html, block.text)
+        code_text = normalize_tool_payload(extract_code_text(block.html))
+        if code_text.strip():
+            parts.append(f"```{language}\n{code_text}\n```")
+
+    return "\n\n".join(parts).strip()
+
+
+def render_other_group(group: Group, heading: str) -> str:
+    parts = [f"## {heading}"]
+    for block in group.blocks:
+        text = collapse_whitespace(block.text).strip()
+        if text:
+            parts.append(text)
+    return "\n\n".join(parts).strip()
+
+
+def collect_full_tool_output(groups: list[Group]) -> str:
+    parts = ["# Copilot tool output"]
+
+    tool_n = 0
+    code_n = 0
+
+    for group in groups:
+        if group.kind == "tool":
+            tool_n += 1
+            parts.append(render_tool_group_full(group, f"Tool output {tool_n}"))
+        elif group.kind == "code":
+            code_n += 1
+            parts.append(render_tool_group_full(group, f"Code block {code_n}"))
+
+    return "\n\n---\n\n".join(parts).strip() + "\n"
+
+
+def render_transcript(groups: list[Group], tool_mode: str = "summary") -> str:
+    parts = ["# Copilot transcript"]
+
+    msg_n = 0
+    tool_n = 0
+    code_n = 0
+    other_n = 0
+
+    for group in groups:
+        section = ""
+
+        if group.kind == "message":
+            msg_n += 1
+            body = render_message_group(group)
+            if body:
+                section = f"## Message {msg_n}\n\n{body}"
+
+        elif group.kind == "tool":
+            tool_n += 1
+            if tool_mode == "omit":
+                section = ""
+            elif tool_mode == "summary":
+                section = render_tool_group_summary(group, f"Tool output {tool_n}")
+            else:
+                section = render_tool_group_full(group, f"Tool output {tool_n}")
+
+        elif group.kind == "code":
+            code_n += 1
+            if tool_mode == "omit":
+                section = ""
+            elif tool_mode == "summary":
+                section = render_tool_group_summary(group, f"Code block {code_n}")
+            else:
+                section = render_tool_group_full(group, f"Code block {code_n}")
 
         else:
-            assistant = ensure_assistant()
-            assistant.intro_blocks.append(block)
+            other_n += 1
+            section = render_other_group(group, f"Other {other_n}")
 
-        previous_kind = kind
+        if section.strip():
+            parts.append(section)
 
-    return messages
-
-
-def render_message(message: Message, number: int) -> str:
-    parts: list[str] = []
-    heading = "User" if message.role == "user" else "Assistant"
-    parts.append(f"## {heading} {number}")
-
-    if message.role == "user":
-        for block in message.intro_blocks:
-            text = extract_text_from_block(block)
-            if text:
-                parts.append(text)
-        return "\n\n".join(parts)
-
-    if message.intro_blocks:
-        parts.append("### Worklog")
-        for block in message.intro_blocks:
-            text = extract_text_from_block(block)
-            if text:
-                parts.append(text)
-
-    if message.tool_blocks:
-        parts.append("### Tool output")
-        for block in message.tool_blocks:
-            lang = infer_code_language(block)
-            text = extract_text_from_block(block)
-            if not text:
-                continue
-            parts.append(f"```{lang}\n{text}\n```")
-
-    if message.final_blocks:
-        parts.append("### Final")
-        for block in message.final_blocks:
-            text = extract_text_from_block(block)
-            if text:
-                parts.append(text)
-
-    return "\n\n".join(parts)
-
-
-def render_transcript(messages: list[Message], source_url: str, title: str) -> str:
-    parts: list[str] = [
-        "# Copilot chat transcript",
-        f"- Source: {source_url}",
-        f"- Title: {title}",
-    ]
-
-    user_count = 0
-    assistant_count = 0
-
-    for message in messages:
-        if message.role == "user":
-            user_count += 1
-            parts.append(render_message(message, user_count))
-        else:
-            assistant_count += 1
-            parts.append(render_message(message, assistant_count))
-
-    output = "\n\n---\n\n".join(part for part in parts if part.strip())
-    output = re.sub(r"\n{3,}", "\n\n", output).strip() + "\n"
-    return output
+    return re.sub(r"\n{3,}", "\n\n", "\n\n---\n\n".join(parts)).strip() + "\n"
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Extract Copilot chat transcript from Safari.")
+    parser = argparse.ArgumentParser(description="Extract Copilot chat content from Safari.")
     parser.add_argument(
         "--output",
         type=Path,
@@ -370,34 +414,52 @@ def main() -> int:
     parser.add_argument(
         "--stdout",
         action="store_true",
-        help="Print markdown to stdout instead of writing a file.",
+        help="Print the rendered markdown to stdout.",
     )
     parser.add_argument(
         "--raw-json",
         type=Path,
-        help="Optional path to save the raw JSON extracted from Safari.",
+        help="Optional path to save the raw JSON returned by Safari.",
+    )
+    parser.add_argument(
+        "--tool-mode",
+        choices=["omit", "summary", "full"],
+        default="summary",
+        help="How to include tool/code output in the main markdown transcript.",
+    )
+    parser.add_argument(
+        "--tool-output-file",
+        type=Path,
+        help="Optional path to write full tool/code output separately.",
     )
     args = parser.parse_args()
 
     raw = run_osascript(APPLE_SCRIPT)
     data = json.loads(raw)
 
+    if not isinstance(data, list):
+        raise RuntimeError("Expected a JSON array from Safari")
+
     if args.raw_json:
         args.raw_json.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    blocks = parse_blocks(data.get("blocks", []))
-    messages = build_messages(blocks)
-    transcript = render_transcript(
-        messages=messages,
-        source_url=str(data.get("url", "")),
-        title=str(data.get("title", "")),
-    )
+    blocks = parse_blocks(data)
+    groups = group_blocks(blocks)
+
+    output = render_transcript(groups, tool_mode=args.tool_mode)
+
+    if args.tool_output_file:
+        tool_text = collect_full_tool_output(groups)
+        args.tool_output_file.write_text(tool_text, encoding="utf-8")
 
     if args.stdout:
-        sys.stdout.write(transcript)
+        sys.stdout.write(output)
     else:
-        args.output.write_text(transcript, encoding="utf-8")
+        args.output.write_text(output, encoding="utf-8")
         print(f"Wrote {args.output}")
+
+    if args.tool_output_file:
+        print(f"Wrote {args.tool_output_file}")
 
     return 0
 
