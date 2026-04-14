@@ -55,11 +55,12 @@ tell application "Safari"
 (() => {
   const main = document.querySelector('main') || document.body;
 
-  const blocks = Array.from(
-    main.querySelectorAll(
-      '[data-copilot-markdown=\"true\"], figure[class*=\"ToolCodeBlock-module\"], figure[class*=\"CodeBlock-module\"]'
-    )
-  ).map((el, i) => ({
+  const selector =
+    '[data-copilot-markdown=\"true\"], ' +
+    'figure[class*=\"ToolCodeBlock-module\"], ' +
+    'figure[class*=\"CodeBlock-module\"]';
+
+  const blocks = Array.from(main.querySelectorAll(selector)).map((el, i) => ({
     index: i,
     html: el.outerHTML,
     text: (el.innerText || '').replace(/\u00a0/g, ' ').trim()
