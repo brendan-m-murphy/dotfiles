@@ -1,0 +1,182 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#   "beautifulsoup4>=4.12",
+#   "markdownify>=0.13",
+# ]
+# ///
+"""
+Extract GitHub Copilot chat content from the active Safari tab.
+
+Requirements:
+    pip install beautifulsoup4 markdownify
+
+Usage:
+    python safari_copilot_extract.py
+    python safari_copilot_extract.py --all
+    python safari_copilot_extract.py --text
+    python safari_copilot_extract.py --html-out copilot_fragment.html
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+from typing import Any
+
+from bs4 import BeautifulSoup
+from markdownify import markdownify as md
+
+
+APPLE_SCRIPT = r'''
+tell application "Safari"
+    if not (exists front document) then error "No Safari document open"
+    set js to "
+(() => {
+  const out = {};
+
+  out.url = location.href;
+  out.title = document.title;
+
+  // Best target: rendered Copilot markdown blocks
+  const nodes = Array.from(document.querySelectorAll('[data-copilot-markdown=\"true\"]'));
+
+  out.count = nodes.length;
+  out.blocks = nodes.map((el, i) => ({
+    index: i,
+    text: el.innerText,
+    html: el.innerHTML,
+    outer_html: el.outerHTML
+  }));
+
+  // Sometimes useful: embedded JSON payload if present
+  const embedded = document.querySelector(
+    'script[type=\"application/json\"][data-target=\"react-app.embeddedData\"]'
+  );
+  out.embeddedData = embedded ? embedded.textContent : null;
+
+  return JSON.stringify(out);
+})();
+"
+    set raw_result to do JavaScript js in current tab of front window
+    return raw_result
+end tell
+'''
+
+
+def run_osascript(script: str) -> str:
+    result = subprocess.run(
+        ["osascript", "-e", script],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or "osascript failed")
+    return result.stdout.strip()
+
+
+def clean_copilot_html(html: str) -> str:
+    """Remove UI chrome and simplify a GitHub-rendered markdown fragment."""
+    soup = BeautifulSoup(html, "html.parser")
+
+    # Remove obvious GitHub UI bits from code blocks and widgets
+    for selector in [
+        "button",
+        "svg",
+        ".CodeBlock-module__header__tJzrz",
+        ".CodeBlock-module__copyContainer__eNjNy",
+        ".CopyToClipboardButton-module__tooltip__BhMvU",
+        "[aria-hidden='true']",
+    ]:
+        for node in soup.select(selector):
+            node.decompose()
+
+    # GitHub sometimes injects odd attributes like node='[object Object]'
+    for tag in soup.find_all(True):
+        for attr in list(tag.attrs):
+            if attr == "node":
+                del tag.attrs[attr]
+
+    return str(soup)
+
+
+def html_to_markdown(html: str) -> str:
+    """Convert cleaned HTML to reasonably readable markdown."""
+    return md(
+        html,
+        heading_style="ATX",
+        bullets="-",
+        strip=["span"],
+    ).strip()
+
+
+def html_to_text(html: str) -> str:
+    soup = BeautifulSoup(html, "html.parser")
+    return soup.get_text("\n", strip=True)
+
+
+def choose_best_block(blocks: list[dict[str, Any]]) -> dict[str, Any]:
+    """Pick the longest block as a decent default."""
+    if not blocks:
+        raise ValueError("No Copilot markdown blocks found")
+    return max(blocks, key=lambda b: len(b.get("text", "")))
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--all", action="store_true", help="Output all matching blocks")
+    parser.add_argument("--text", action="store_true", help="Output plain text instead of markdown")
+    parser.add_argument("--html-out", help="Write cleaned HTML fragment to this file")
+    parser.add_argument("--json-out", help="Write raw Safari JSON payload to this file")
+    args = parser.parse_args()
+
+    raw = run_osascript(APPLE_SCRIPT)
+    data = json.loads(raw)
+
+    if args.json_out:
+        with open(args.json_out, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+
+    blocks = data.get("blocks", [])
+    if not blocks:
+        print("No [data-copilot-markdown='true'] blocks found in the current Safari tab.", file=sys.stderr)
+
+        embedded = data.get("embeddedData")
+        if embedded:
+            print(
+                "Embedded JSON exists, so the page likely loaded correctly. "
+                "You may need a different selector or the message may still be streaming.",
+                file=sys.stderr,
+            )
+        return 1
+
+    selected_blocks = blocks if args.all else [choose_best_block(blocks)]
+
+    outputs: list[str] = []
+    for i, block in enumerate(selected_blocks, start=1):
+        cleaned_html = clean_copilot_html(block["html"])
+
+        if args.html_out:
+            out_path = args.html_out
+            if args.all:
+                stem, dot, suffix = out_path.partition(".")
+                out_path = f"{stem}_{i}.{suffix}" if dot else f"{out_path}_{i}.html"
+            with open(out_path, "w", encoding="utf-8") as f:
+                f.write(cleaned_html)
+
+        rendered = html_to_text(cleaned_html) if args.text else html_to_markdown(cleaned_html)
+        if args.all:
+            outputs.append(f"<!-- block {i} -->\n\n{rendered}")
+        else:
+            outputs.append(rendered)
+
+    print("\n\n".join(outputs))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
