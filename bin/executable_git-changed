@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+print_help() {
+    cat <<'EOF'
+git-changed: list files changed in a git range, or apply a command to them
+
+USAGE
+  git-changed [OPTIONS] [COMMAND [ARG ...]]
+
+DEFAULTS
+  Range:
+    origin/devel...HEAD
+
+  Diff filter:
+    AM   (added, modified)
+
+BEHAVIOR
+  - With no COMMAND, prints changed files, one per line.
+  - With a COMMAND, runs:
+      COMMAND [ARG ...] <changed-files...>
+
+OPTIONS
+  -r, --range RANGE
+      Git diff range or base ref.
+
+      If RANGE contains '..' or '...', it is used as given.
+      Otherwise it is treated as a base ref and expanded to:
+          RANGE...HEAD
+
+      Examples:
+          -r origin/devel
+          -r origin/main
+          -r 'HEAD~3..HEAD'
+          -r 'upstream/devel...feature-x'
+
+  -p, --pathspec PATH
+      Restrict to matching paths. May be given multiple times.
+
+      Examples:
+          -p '*.py'
+          -p 'src/**'
+          -p 'tests/**'
+
+  -z, --print0
+      Print NUL-delimited output when no COMMAND is given.
+
+  -h, --help
+      Show this help.
+
+EXAMPLES
+  git-changed
+  git-changed ruff check
+  git-changed ruff format --check
+  git-changed -p '*.py' ruff check
+  git-changed -r origin/main -p '*.py' ruff format --check
+
+NOTES
+  - Pathspecs are passed to git diff, not shell-expanded globs.
+  - When a command is provided, filenames are passed as separate arguments.
+  - If no files match, no command is run and exit status is 0.
+EOF
+}
+
+git_changed_files() {
+    local spec="${1:-origin/devel}"
+    shift || true
+
+    local range
+    if [[ "$spec" == *".."* ]]; then
+        range="$spec"
+    else
+        range="${spec}...HEAD"
+    fi
+
+    git diff -z --name-only --diff-filter=AM "$range" -- "$@"
+}
+
+main() {
+    local spec="origin/devel"
+    local print0=0
+    local -a pathspecs=()
+    local -a cmd=()
+
+    while (($#)); do
+        case "$1" in
+            -h|--help)
+                print_help
+                return 0
+                ;;
+            -r|--range)
+                [[ $# -ge 2 ]] || { echo "Missing value for $1" >&2; return 2; }
+                spec="$2"
+                shift 2
+                ;;
+            -p|--pathspec)
+                [[ $# -ge 2 ]] || { echo "Missing value for $1" >&2; return 2; }
+                pathspecs+=("$2")
+                shift 2
+                ;;
+            -z|--print0)
+                print0=1
+                shift
+                ;;
+            --)
+                shift
+                cmd=("$@")
+                break
+                ;;
+            -*)
+                echo "Unknown option: $1" >&2
+                echo "Try: git-changed --help" >&2
+                return 2
+                ;;
+            *)
+                cmd=("$@")
+                break
+                ;;
+        esac
+    done
+
+    local -a files=()
+    mapfile -d '' -t files < <(git_changed_files "$spec" "${pathspecs[@]}")
+
+    if ((${#cmd[@]} == 0)); then
+        if ((print0)); then
+            local f
+            for f in "${files[@]}"; do
+                printf '%s\0' "$f"
+            done
+        else
+            local f
+            for f in "${files[@]}"; do
+                printf '%s\n' "$f"
+            done
+        fi
+        return 0
+    fi
+
+    ((${#files[@]})) || return 0
+    "${cmd[@]}" "${files[@]}"
+}
+
+main "$@"
