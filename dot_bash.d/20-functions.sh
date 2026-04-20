@@ -29,7 +29,7 @@ EOF
 alias mkenvrc=mkvenv_envrc
 
 ch() {
-  local default_config="${CHUNKHOUND_CONFIG_FILE:-$HOME/.config/chunkhound/config.json}"
+  local default_config="${CHUNKHOUND_CONFIG_FILE:-$HOME/.config/chunkhound/default.json}"
 
   if [[ $# -eq 0 ]]; then
     chunkhound
