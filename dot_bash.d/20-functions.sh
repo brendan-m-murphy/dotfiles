@@ -29,5 +29,6 @@ EOF
 alias mkenvrc=mkvenv_envrc
 
 ch() {
-  chunkhound --config "$HOME/.config/chunkhound/config.json" "$@"
+  CHUNKHOUND_CONFIG_FILE="${CHUNKHOUND_CONFIG_FILE:-$HOME/.config/chunkhound/config.json}" \
+    chunkhound "$@"
 }
