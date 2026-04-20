@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage:
+  ch-research-save [-b] [-d OUTPUT_DIR] [-o OUTPUT_FILE] QUERY [SHORTNAME]
+
+Save `chunkhound research` output to a markdown file.
+
+Default output path:
+  OUTPUT_DIR/REPO/TIMESTAMP[_BRANCH]_SHORTNAME.md
+
+Arguments:
+  QUERY        Research query to pass to chunkhound
+  SHORTNAME    Optional short slug for the filename
+               Default: research
+
+Options:
+  -b           Include current branch metadata, and include branch in the
+               generated filename unless -o is used
+  -d DIR       Base output directory
+               Default: ~/Documents/chunkhound_research
+  -o FILE      Explicit output file path; bypass generated filename/subdir logic
+  -h           Show this help and exit
+
+Examples:
+  ch-research-save "How does standardising data work?"
+  ch-research-save -b "How does standardising data work?" standardising-data
+  ch-research-save -o ~/tmp/std-data.md "How does standardising data work?"
+EOF
+}
+
+slugify() {
+  printf '%s' "$1" \
+    | tr '[:upper:]' '[:lower:]' \
+    | sed -E 's/[^a-z0-9._-]+/-/g; s/^-+//; s/-+$//'
+}
+
+include_branch=0
+base_dir="${CH_RESEARCH_DIR:-$HOME/Documents/chunkhound_research}"
+explicit_out_file=""
+
+while getopts ":bd:o:h" opt; do
+  case "$opt" in
+    b)
+      include_branch=1
+      ;;
+    d)
+      base_dir="$OPTARG"
+      ;;
+    o)
+      explicit_out_file="$OPTARG"
+      ;;
+    h)
+      usage
+      exit 0
+      ;;
+    \?)
+      printf 'Error: invalid option: -%s\n\n' "$OPTARG" >&2
+      usage >&2
+      exit 2
+      ;;
+    :)
+      printf 'Error: option -%s requires an argument\n\n' "$OPTARG" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+shift $((OPTIND - 1))
+
+if [[ $# -lt 1 || $# -gt 2 ]]; then
+  printf 'Error: expected QUERY and optional SHORTNAME\n\n' >&2
+  usage >&2
+  exit 2
+fi
+
+query="$1"
+shortname="${2:-research}"
+
+repo_root="$(git rev-parse --show-toplevel)"
+repo_name="$(basename "$repo_root")"
+timestamp="$(date +%Y-%m-%d_%H-%M-%S)"
+slug="$(slugify "$shortname")"
+
+branch=""
+if [[ "$include_branch" -eq 1 ]]; then
+  branch="$(git branch --show-current || true)"
+  branch="${branch:-detached}"
+fi
+
+if [[ -n "$explicit_out_file" ]]; then
+  out_file="$explicit_out_file"
+  mkdir -p "$(dirname "$out_file")"
+else
+  out_dir="$base_dir/$repo_name"
+  mkdir -p "$out_dir"
+
+  filename="${timestamp}"
+  if [[ "$include_branch" -eq 1 ]]; then
+    branch_slug="$(slugify "$branch")"
+    filename="${filename}_${branch_slug}"
+  fi
+  filename="${filename}_${slug}.md"
+  out_file="$out_dir/$filename"
+fi
+
+{
+  printf '# ChunkHound Research\n\n'
+  printf -- '- Repo: `%s`\n' "$repo_name"
+  printf -- '- Timestamp: `%s`\n' "$timestamp"
+  if [[ "$include_branch" -eq 1 ]]; then
+    printf -- '- Branch: `%s`\n' "$branch"
+  fi
+  printf -- '- Query: `%s`\n\n' "$query"
+  printf -- '---\n\n'
+  chunkhound research "$query"
+} | tee "$out_file"
+
+printf '\nSaved to %s\n' "$out_file"
