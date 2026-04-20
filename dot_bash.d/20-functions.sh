@@ -25,3 +25,9 @@ EOF
   direnv allow
   echo "Created $envrc_path for $venv_name"
 }
+
+alias mkenvrc=mkvenv_envrc
+
+ch() {
+  chunkhound --config "$HOME/.config/chunkhound/config.json" "$@"
+}
