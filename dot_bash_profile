@@ -47,3 +47,9 @@ eval "$(direnv hook bash)"
 if [ -f "$HOME/.bashrc" ]; then
   source "$HOME/.bashrc"
 fi
+
+# set chunkhound env var for API key
+# TODO: use password manager
+if [ -f "$HOME/.config/secrets/chunkhound.env" ]; then
+  . "$HOME/.config/secrets/chunkhound.env"
+fi
