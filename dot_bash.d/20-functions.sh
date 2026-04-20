@@ -29,6 +29,28 @@ EOF
 alias mkenvrc=mkvenv_envrc
 
 ch() {
-  CHUNKHOUND_CONFIG_FILE="${CHUNKHOUND_CONFIG_FILE:-$HOME/.config/chunkhound/config.json}" \
-    chunkhound "$@"
+  local default_config="${CHUNKHOUND_CONFIG_FILE:-$HOME/.config/chunkhound/config.json}"
+
+  if [[ $# -eq 0 ]]; then
+    chunkhound
+    return
+  fi
+
+  local cmd="$1"
+  shift
+
+  case "$cmd" in
+    index|mcp|search|research|calibrate)
+      for arg in "$@"; do
+        if [[ "$arg" == "--config" ]]; then
+          chunkhound "$cmd" "$@"
+          return
+        fi
+      done
+      chunkhound "$cmd" --config "$default_config" "$@"
+      ;;
+    *)
+      chunkhound "$cmd" "$@"
+      ;;
+  esac
 }
