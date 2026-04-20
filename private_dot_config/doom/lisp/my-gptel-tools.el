@@ -47,6 +47,10 @@ Each entry should be a directory. Paths are canonicalized via `file-truename'."
   "Hard cap on number of ripgrep hits returned."
   :type 'integer)
 
+(defcustom my/gptel-default-ignore-globs '(".git/**")
+  "Default glob patterns excluded from scoped gptel file inspection tools."
+  :type '(repeat string))
+
 (defun my/gptel--project-root ()
   "Best-effort project root using projectile, then project.el, else nil."
   (cond
@@ -99,8 +103,161 @@ If DIRECTORYP is non-nil, normalize with a trailing slash."
                                              (file-directory-p
                                               (expand-file-name path)))))
 
-(defun my/gptel--allowed-roots ()
-  "Compute effective allowed roots: project root + extra roots + session roots."
+(defun my/gptel--delete-dups-stable (items)
+  "Return ITEMS with duplicates removed, preserving first-seen order."
+  (let ((seen (make-hash-table :test #'equal))
+        result)
+    (dolist (item items (nreverse result))
+      (unless (gethash item seen)
+        (puthash item t seen)
+        (push item result)))))
+
+(defun my/gptel--split-property-entries (value)
+  "Split Org property VALUE into shell-style whitespace-separated entries.
+
+Single quotes, double quotes, and backslash escapes are respected so buffer
+names with spaces can be represented safely."
+  (when value
+    (let ((trimmed (string-trim value)))
+      (unless (string-empty-p trimmed)
+        (let ((index 0)
+              (length (length trimmed))
+              entries)
+          (while (< index length)
+            (while (and (< index length)
+                        (memq (aref trimmed index) '(?\s ?\t ?\n ?\r)))
+              (setq index (1+ index)))
+            (when (< index length)
+              (let ((quote-char nil)
+                    (chars nil)
+                    (done nil))
+                (while (and (< index length) (not done))
+                  (let ((char (aref trimmed index)))
+                    (cond
+                     ((eq char ?\\)
+                      (setq index (1+ index))
+                      (when (< index length)
+                        (push (aref trimmed index) chars)))
+                     ((and quote-char (eq char quote-char))
+                      (setq quote-char nil))
+                     ((and (null quote-char)
+                           (memq char '(?\" ?\')))
+                      (setq quote-char char))
+                     ((and (null quote-char)
+                           (memq char '(?\s ?\t ?\n ?\r)))
+                      (setq done t))
+                     (t
+                      (push char chars))))
+                  (unless done
+                    (setq index (1+ index))))
+                (push (apply #'string (nreverse chars)) entries))))
+          (nreverse entries))))))
+
+(defun my/gptel--parse-boolean-property (value)
+  "Parse boolean-like property VALUE.
+Return t, nil, or :invalid when VALUE is present but unsupported."
+  (when value
+    (let ((normalized (downcase (string-trim value))))
+      (cond
+       ((member normalized '("t" "true" "yes" "1")) t)
+       ((member normalized '("nil" "false" "no" "0")) nil)
+       (t :invalid)))))
+
+(defun my/gptel--session-base-directory ()
+  "Return the best base directory for resolving session-relative paths."
+  (file-name-as-directory
+   (my/gptel--canonical-path
+    (or (and buffer-file-name
+             (file-name-directory (buffer-file-name (buffer-base-buffer))))
+        default-directory)
+    t)))
+
+(defun my/gptel--session-topic-heading ()
+  "Return the current Org session heading, if any."
+  (when (derived-mode-p 'org-mode)
+    (save-excursion
+      (when (ignore-errors
+              (unless (org-before-first-heading-p)
+                (org-back-to-heading t)))
+        (org-get-heading t t t t)))))
+
+(defun my/gptel--glob-segment-to-regexp (segment)
+  "Convert a single glob SEGMENT to a regexp fragment."
+  (let ((index 0)
+        (length (length segment))
+        parts)
+    (while (< index length)
+      (let ((char (aref segment index)))
+        (push
+         (cond
+          ((eq char ?*) "[^/]*")
+          ((eq char ??) "[^/]")
+          (t (regexp-quote (char-to-string char))))
+         parts))
+      (setq index (1+ index)))
+    (apply #'concat (nreverse parts))))
+
+(defun my/gptel--glob-to-regexp (glob)
+  "Convert path GLOB to a regexp with `**' directory semantics."
+  (let* ((normalized (replace-regexp-in-string "\\`\\./+" "" (string-trim glob)))
+         (segments (split-string normalized "/" t))
+         (segment-count (length segments))
+         (regex "^"))
+    (cond
+     ((null segments)
+      "^$")
+     (t
+      (cl-loop for segment in segments
+               for index from 0
+               for firstp = (= index 0)
+               for lastp = (= index (1- segment-count))
+               for previous = (and (> index 0) (nth (1- index) segments))
+               do
+               (cond
+                ((string= segment "**")
+                 (setq regex
+                       (concat regex
+                               (cond
+                                ((and firstp lastp) ".*")
+                                (firstp "\\(?:[^/]+/\\)*")
+                                (lastp "\\(?:/.*\\)?")
+                                (t "\\(?:/[^/]+\\)*")))))
+                (t
+                 (unless (or firstp
+                             (and (string= previous "**")
+                                  (= (1- index) 0)))
+                   (setq regex (concat regex "/")))
+                 (setq regex
+                       (concat regex
+                               (my/gptel--glob-segment-to-regexp segment))))))
+      (concat regex "$")))))
+
+(defun my/gptel--glob-match-p (glob relative-path)
+  "Return non-nil if GLOB matches RELATIVE-PATH."
+  (string-match-p
+   (my/gptel--glob-to-regexp glob)
+   (replace-regexp-in-string "/\\'" "" relative-path)))
+
+(defun my/gptel--org-session-property-state (property)
+  "Return (FOUNDP . VALUE) for PROPERTY in the current Org session subtree."
+  (when (derived-mode-p 'org-mode)
+    (save-excursion
+      (when (ignore-errors
+              (unless (org-before-first-heading-p)
+                (org-back-to-heading t)))
+        (catch 'found
+          (while t
+            (when-let ((entry (assoc-string property (org-entry-properties nil 'standard) t)))
+              (throw 'found (cons t (cdr entry))))
+            (unless (org-up-heading-safe)
+              (throw 'found (cons nil nil)))))))))
+
+(defun my/gptel--org-session-property (property)
+  "Return PROPERTY from the current Org subtree used for gptel session metadata."
+  (cdr (my/gptel--org-session-property-state property)))
+
+(defun my/gptel--default-allowed-roots ()
+  "Return the pre-property default allowed roots for the current session."
   (let ((roots nil))
     (when-let ((project-root (my/gptel--project-root)))
       (push (my/gptel--tru-dir project-root) roots))
@@ -110,7 +267,168 @@ If DIRECTORYP is non-nil, normalize with a trailing slash."
     (dolist (root my/gptel-session-roots)
       (when root
         (push (my/gptel--tru-dir root) roots)))
-    (cl-delete-duplicates (delq nil roots) :test #'string-equal)))
+    (my/gptel--delete-dups-stable (nreverse (delq nil roots)))))
+
+(defun my/gptel--normalize-root-entry (path)
+  "Expand and canonicalize absolute root PATH."
+  (let ((expanded (expand-file-name path)))
+    (unless (file-name-absolute-p expanded)
+      (user-error "GPTEL_ALLOWED_ROOTS entries must be absolute paths: %s" path))
+    (my/gptel--canonical-path expanded t)))
+
+(defun my/gptel--normalize-root-entries (entries)
+  "Normalize allowed-root ENTRIES."
+  (my/gptel--delete-dups-stable
+   (delq nil
+         (mapcar (lambda (entry)
+                   (when (and entry (not (string-empty-p entry)))
+                     (my/gptel--normalize-root-entry entry)))
+                 entries))))
+
+(defun my/gptel--buffer-name-for-path (path)
+  "Return the live buffer name visiting PATH, if any."
+  (let ((canonical (my/gptel--canonical-path path)))
+    (catch 'match
+      (dolist (buffer (buffer-list))
+        (with-current-buffer buffer
+          (when-let ((buffer-path (buffer-file-name (buffer-base-buffer))))
+            (when (string-equal canonical (my/gptel--canonical-path buffer-path))
+              (throw 'match (buffer-name buffer))))))
+      nil)))
+
+(defun my/gptel--resolve-relevant-buffer-entry (entry)
+  "Resolve relevant buffer ENTRY to a live buffer name when possible."
+  (let ((base-directory (my/gptel--session-base-directory)))
+    (cond
+     ((or (null entry) (string-empty-p entry)) nil)
+     ((get-buffer entry) entry)
+     ((file-name-absolute-p entry)
+      (or (my/gptel--buffer-name-for-path entry)
+          (my/gptel--canonical-path entry)))
+     (t
+      (or (when-let ((buffer (get-file-buffer (expand-file-name entry base-directory))))
+            (buffer-name buffer))
+          entry)))))
+
+(defun my/gptel--default-relevant-buffers ()
+  "Return the pre-property default relevant buffers."
+  (my/gptel--delete-dups-stable (copy-sequence my/gptel-relevant-buffers)))
+
+(defun my/gptel--session-scope ()
+  "Resolve the active gptel session scope from defaults and Org overrides.
+
+The resolution path is:
+1. Compute existing/default roots and relevant buffers.
+2. Read Org property overrides from the active gptel subtree/topic.
+3. If no scoping properties are set, return defaults unchanged.
+4. Otherwise, apply property overrides consistently across tool access and
+   prompt context."
+  (let* ((default-roots (my/gptel--default-allowed-roots))
+         (default-buffers (my/gptel--default-relevant-buffers))
+         (default-ignore-globs (my/gptel--delete-dups-stable
+                                (copy-sequence my/gptel-default-ignore-globs)))
+         (raw-roots (my/gptel--org-session-property "GPTEL_ALLOWED_ROOTS"))
+         (raw-buffers (my/gptel--org-session-property "GPTEL_RELEVANT_BUFFERS"))
+         (raw-ignore-globs (my/gptel--org-session-property "GPTEL_IGNORE_GLOBS"))
+         (inherit-state (my/gptel--org-session-property-state
+                         "GPTEL_INHERIT_DEFAULT_ROOTS"))
+         (inherit-present-p (car inherit-state))
+         (raw-inherit (cdr inherit-state))
+         (scoped-p (cl-some #'identity
+                            (list raw-roots raw-buffers raw-ignore-globs
+                                  inherit-present-p)))
+         (explicit-roots
+          (and raw-roots
+               (my/gptel--normalize-root-entries
+                (my/gptel--split-property-entries raw-roots))))
+         (inherit-default-roots
+          (cond
+           (explicit-roots
+            (if inherit-present-p
+                (pcase (my/gptel--parse-boolean-property raw-inherit)
+                  (:invalid
+                   (user-error "Invalid GPTEL_INHERIT_DEFAULT_ROOTS value: %s"
+                               raw-inherit))
+                  (value value))
+              nil))
+           (inherit-present-p
+            (pcase (my/gptel--parse-boolean-property raw-inherit)
+              (:invalid
+               (user-error "Invalid GPTEL_INHERIT_DEFAULT_ROOTS value: %s"
+                           raw-inherit))
+              (_ t)))
+           (t t)))
+         (explicit-buffers
+          (and raw-buffers
+               (my/gptel--delete-dups-stable
+                (delq nil
+                      (mapcar #'my/gptel--resolve-relevant-buffer-entry
+                              (my/gptel--split-property-entries raw-buffers))))))
+         (extra-ignore-globs
+          (and raw-ignore-globs
+               (my/gptel--delete-dups-stable
+                (my/gptel--split-property-entries raw-ignore-globs))))
+         (resolved-roots
+          (if explicit-roots
+              (my/gptel--delete-dups-stable
+               (append explicit-roots
+                       (when inherit-default-roots default-roots)))
+            default-roots))
+         (resolved-buffers (or explicit-buffers default-buffers))
+         (resolved-ignore-globs
+          (my/gptel--delete-dups-stable
+           (append default-ignore-globs extra-ignore-globs))))
+    (list :scoped-p scoped-p
+          :topic-heading (my/gptel--session-topic-heading)
+          :topic-id (my/gptel--org-session-property "GPTEL_TOPIC")
+          :default-roots default-roots
+          :allowed-roots resolved-roots
+          :relevant-buffers resolved-buffers
+          :ignore-globs resolved-ignore-globs
+          :inherit-default-roots inherit-default-roots
+          :explicit-roots explicit-roots
+          :explicit-buffers explicit-buffers
+          :extra-ignore-globs extra-ignore-globs)))
+
+(defun my/gptel--allowed-roots ()
+  "Return the effective allowed roots for the current gptel session."
+  (plist-get (my/gptel--session-scope) :allowed-roots))
+
+(defun my/gptel--relevant-buffers ()
+  "Return the effective relevant buffers for the current gptel session."
+  (plist-get (my/gptel--session-scope) :relevant-buffers))
+
+(defun my/gptel--ignore-globs ()
+  "Return the effective ignore globs for the current gptel session."
+  (plist-get (my/gptel--session-scope) :ignore-globs))
+
+(defun my/gptel--path-relative-to-allowed-root (path)
+  "Return PATH relative to the first matching allowed root, or nil."
+  (let* ((expanded (expand-file-name path))
+         (canonical (my/gptel--canonical-path expanded (file-directory-p expanded))))
+    (catch 'match
+      (dolist (root (my/gptel--allowed-roots))
+        (when (string-prefix-p root canonical)
+          (throw 'match (file-relative-name canonical root))))
+      nil)))
+
+(defun my/gptel--ignored-relative-path-p (relative-path)
+  "Return non-nil if RELATIVE-PATH matches an ignored glob."
+  (cl-some (lambda (glob)
+             (my/gptel--glob-match-p glob relative-path))
+           (my/gptel--ignore-globs)))
+
+(defun my/gptel--ignored-path-p (path)
+  "Return non-nil if PATH matches an ignored glob within allowed roots."
+  (when-let ((relative-path (my/gptel--path-relative-to-allowed-root path)))
+    (my/gptel--ignored-relative-path-p relative-path)))
+
+(defun my/gptel--assert-readable-path (path)
+  "Signal a `user-error' if PATH is outside allowed roots or ignored."
+  (my/gptel--assert-allowed path)
+  (when (my/gptel--ignored-path-p path)
+    (user-error "Path ignored by session scope: %s" (expand-file-name path)))
+  path)
 
 (defun my/gptel--allowed-path-p (path)
   "Return non-nil if PATH is under one of the allowed roots."
@@ -161,7 +479,7 @@ If DIRECTORYP is non-nil, normalize with a trailing slash."
   (setq start-line (max 1 (or start-line 1)))
   (setq end-line (max start-line (or end-line (+ start-line 40))))
   (let ((want-lines (min my/gptel-max-lines (1+ (- end-line start-line)))))
-    (my/gptel--assert-allowed path)
+    (my/gptel--assert-readable-path path)
     (my/gptel--assert-text-file path)
     (with-temp-buffer
       (insert-file-contents path nil 0 my/gptel-max-bytes)
@@ -332,9 +650,14 @@ Return relative paths."
                                          t)))
          (glob (or (plist-get args :glob) "**/*"))
          (max (min 500 (or (plist-get args :max) 200))))
-    (my/gptel--assert-allowed dir)
+    (my/gptel--assert-readable-path dir)
     (let* ((files (file-expand-wildcards (expand-file-name glob dir) t))
            (files (cl-remove-if #'file-directory-p files))
+           (files (cl-remove-if
+                   (lambda (file)
+                     (my/gptel--ignored-relative-path-p
+                      (file-relative-name file dir)))
+                   files))
            (files (cl-subseq files 0 (min max (length files)))))
       (mapconcat (lambda (file) (file-relative-name file dir)) files "\n"))))
 
@@ -348,13 +671,16 @@ Return relative paths."
          (pattern (or (plist-get args :pattern) (user-error "Missing :pattern")))
          (glob (plist-get args :glob))
          (max (min my/gptel-rg-max-hits (or (plist-get args :max) 120))))
-    (my/gptel--assert-allowed dir)
+    (my/gptel--assert-readable-path dir)
     (unless (executable-find "rg")
       (user-error "ripgrep (rg) not found on PATH"))
     (let* ((default-directory dir)
            (cmd (append (list "rg" "--no-heading" "--line-number" "--color" "never"
                               "--max-count" (number-to-string max)
-                              "--hidden" "--glob" "!.git/*")
+                              "--hidden")
+                        (mapcan (lambda (ignore-glob)
+                                  (list "--glob" (concat "!" ignore-glob)))
+                                (my/gptel--ignore-globs))
                         (when glob (list "--glob" glob))
                         (list pattern "."))))
       (string-trim
@@ -382,7 +708,7 @@ Return relative paths."
   (setq args (my/gptel--args->plist args '("path" "n")))
   (let* ((path (expand-file-name (or (plist-get args :path) (user-error "Missing :path"))))
          (n (min my/gptel-max-lines (or (plist-get args :n) 60))))
-    (my/gptel--assert-allowed path)
+    (my/gptel--assert-readable-path path)
     (my/gptel--assert-text-file path)
     (with-temp-buffer
       (insert-file-contents path nil 0 my/gptel-max-bytes)
@@ -418,6 +744,45 @@ Return relative paths."
   (interactive)
   (message "Allowed roots: %s"
            (string-join (my/gptel--allowed-roots) ", ")))
+
+(defun my/gptel-describe-session-scope ()
+  "Display the resolved gptel session scope for the current Org topic."
+  (interactive)
+  (let* ((scope (my/gptel--session-scope))
+         (topic-heading (plist-get scope :topic-heading))
+         (topic-id (plist-get scope :topic-id))
+         (allowed-roots (plist-get scope :allowed-roots))
+         (relevant-buffers (plist-get scope :relevant-buffers))
+         (ignore-globs (plist-get scope :ignore-globs))
+         (inherit-default-roots (plist-get scope :inherit-default-roots))
+         (scoped-p (plist-get scope :scoped-p)))
+    (with-current-buffer (get-buffer-create "*gptel-session-scope*")
+      (erase-buffer)
+      (insert (format "Scoped properties active: %s\n"
+                      (if scoped-p "yes" "no")))
+      (when topic-heading
+        (insert (format "Topic heading: %s\n" topic-heading)))
+      (when topic-id
+        (insert (format "GPTEL_TOPIC: %s\n" topic-id)))
+      (insert (format "Inherit default roots: %s\n\n"
+                      (if inherit-default-roots "yes" "no")))
+      (insert "Allowed roots:\n")
+      (if allowed-roots
+          (dolist (root allowed-roots)
+            (insert (format "- %s\n" root)))
+        (insert "- (none)\n"))
+      (insert "\nRelevant buffers:\n")
+      (if relevant-buffers
+          (dolist (buffer relevant-buffers)
+            (insert (format "- %s\n" buffer)))
+        (insert "- (none)\n"))
+      (insert "\nIgnore globs:\n")
+      (if ignore-globs
+          (dolist (glob ignore-globs)
+            (insert (format "- %s\n" glob)))
+        (insert "- (none)\n"))
+      (goto-char (point-min))
+      (display-buffer (current-buffer)))))
 
 (defun my/gptel-set-write-root (dir)
   "Set the current buffer's write root to DIR.
@@ -546,7 +911,7 @@ If DIR is inside a git repo, use the repo root as the write root."
 
 (defun my/gptel--assert-relevant-buffer (name)
   "Require NAME to be a live relevant buffer."
-  (unless (member name my/gptel-relevant-buffers)
+  (unless (member name (my/gptel--relevant-buffers))
     (user-error "Buffer not marked relevant: %s" name))
   (unless (my/gptel--buffer-live-p name)
     (user-error "Buffer not live: %s" name))
@@ -554,9 +919,9 @@ If DIR is inside a git repo, use the repo root as the write root."
 
 (defun my/gptel-tool-list-relevant-buffers (&rest _args)
   "List buffers marked relevant (one per line)."
-  (setq my/gptel-relevant-buffers
-        (cl-remove-if-not #'my/gptel--buffer-live-p my/gptel-relevant-buffers))
-  (string-join my/gptel-relevant-buffers "\n"))
+  (string-join
+   (cl-remove-if-not #'my/gptel--buffer-live-p (my/gptel--relevant-buffers))
+   "\n"))
 
 (defun my/gptel-tool-read-buffer-range (&rest args)
   "Read a line range from a relevant buffer using ARGS."
@@ -586,7 +951,7 @@ If DIR is inside a git repo, use the repo root as the write root."
                 (my/gptel--assert-relevant-buffer name)
                 (list name))
             (cl-remove-if-not #'my/gptel--buffer-live-p
-                              my/gptel-relevant-buffers)))
+                              (my/gptel--relevant-buffers))))
          (results '())
          (lines-used 0))
     (dolist (name buffers)

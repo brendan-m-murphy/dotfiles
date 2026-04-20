@@ -639,6 +639,16 @@
         :desc "Clear relevant buffers" "a C" #'my/gptel-clear-relevant-buffers
         :desc "Mark project buffers relevant" "a p" #'my/gptel-mark-project-buffers-relevant)
   (map! :leader
+        (:prefix ("a s" . "gptel session scope")
+         :desc "Set allowed roots" "r" #'my/gptel-set-session-allowed-roots
+         :desc "Toggle inherit defaults" "i" #'my/gptel-toggle-session-inherit-default-roots
+         :desc "Add relevant buffers" "b" #'my/gptel-add-session-relevant-buffers
+         :desc "Set relevant buffers" "B" #'my/gptel-set-session-relevant-buffers
+         :desc "Add current buffer" "c" #'my/gptel-add-current-buffer-to-session-scope
+         :desc "Add ignore globs" "g" #'my/gptel-add-session-ignore-globs
+         :desc "Describe scope" "d" #'my/gptel-describe-session-scope
+         :desc "Clear scope properties" "x" #'my/gptel-clear-session-scope-properties))
+  (map! :leader
         (:prefix ("a w" . "gptel write root")
          :desc "Set write root" "s" #'my/gptel-set-write-root
          :desc "Set write root to project" "p" #'my/gptel-set-write-root-to-project

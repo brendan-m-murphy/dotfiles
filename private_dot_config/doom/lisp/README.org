@@ -200,6 +200,8 @@ The key idea is controlled access:
 - read/search tools for local files and buffers
 - optional edit tools
 - write-root enforcement so edits stay inside an explicit repo or directory
+- Org-property-based session scoping for allowed roots, relevant buffers, and
+  ignore globs
 
 This is the low-level tool layer used by the Org/gptel workflow.
 
@@ -216,6 +218,31 @@ coexist cleanly:
 
 It also provides the dynamic system message and reference helpers used during
 AI-assisted work.
+
+*** Session scope properties
+
+The gptel Org workflow supports these topic-level properties:
+
+- =GPTEL_ALLOWED_ROOTS=
+- =GPTEL_RELEVANT_BUFFERS=
+- =GPTEL_IGNORE_GLOBS=
+- =GPTEL_INHERIT_DEFAULT_ROOTS=
+
+Property values are whitespace-separated, but entries containing spaces must be
+quoted. The parser accepts both single-quoted and double-quoted entries.
+
+Example:
+
+#+begin_src org
+:GPTEL_ALLOWED_ROOTS: /Users/me/src/repo-a /Users/me/src/repo-b
+:GPTEL_RELEVANT_BUFFERS: pymc_model_refactor.org "*forge: openghg/openghg_inversions #375*" "*magit-diff: ~/repo/*"
+:GPTEL_IGNORE_GLOBS: .venv/** data/**
+:GPTEL_INHERIT_DEFAULT_ROOTS: nil
+#+end_src
+
+If =GPTEL_ALLOWED_ROOTS= is present and =GPTEL_INHERIT_DEFAULT_ROOTS= is absent,
+the session uses the explicit roots only. Set =GPTEL_INHERIT_DEFAULT_ROOTS= to a
+truthy value to merge the explicit roots with the default/project roots.
 
 * GitHub Links
 

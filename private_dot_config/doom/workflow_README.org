@@ -140,6 +140,45 @@ conversation history and working context.
 
 This means you can preserve chat history without forcing a rigid schema.
 
+** gptel session scope properties
+
+Within a =**= task/topic subtree, gptel can be scoped with Org properties:
+
+- =GPTEL_ALLOWED_ROOTS=
+- =GPTEL_RELEVANT_BUFFERS=
+- =GPTEL_IGNORE_GLOBS=
+- =GPTEL_INHERIT_DEFAULT_ROOTS=
+
+These are read from the current topic subtree and applied to filesystem tools,
+buffer tools, and the model-facing session summary.
+
+Property values are whitespace-separated. If an entry contains spaces, quote it
+with either single quotes or double quotes.
+
+Example:
+
+#+begin_src org
+** pymc follow-up
+:PROPERTIES:
+:GPTEL_TOPIC: pymc_follow_up
+:GPTEL_ALLOWED_ROOTS: /Users/me/Documents/openghg_inversions-wt/openghg_inversions-task-stage-e-follow-up-tidying
+:GPTEL_RELEVANT_BUFFERS: pymc_model_refactor.org "*forge: openghg/openghg_inversions #375*" "*magit-diff: ~/Documents/openghg_inversions-wt/openghg_inversions-task-stage-e-follow-up-tidying/*"
+:GPTEL_IGNORE_GLOBS: .venv/** data/**
+:GPTEL_INHERIT_DEFAULT_ROOTS: nil
+:END:
+#+end_src
+
+Default inheritance behavior is conservative:
+
+- if no scoping properties are set, the existing default roots remain in effect
+- if =GPTEL_ALLOWED_ROOTS= is set and inherit is absent, only the explicit roots
+  are used
+- if inherit is truthy, explicit roots are merged with the defaults
+
+Ignore globs are enforced both in Emacs-side path filtering and in the =rg=
+invocation, so patterns like =.venv/**= prevent both file listing and search
+results from those paths.
+
 ** Why this shape exists
 
 This structure supports two competing needs:

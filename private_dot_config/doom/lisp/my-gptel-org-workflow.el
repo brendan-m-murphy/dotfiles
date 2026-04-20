@@ -20,7 +20,13 @@
 (declare-function projectile-project-buffers "ext:projectile")
 (declare-function my/gptel--allowed-path-p "my-gptel-tools" (path))
 (declare-function my/gptel--allowed-roots "my-gptel-tools" ())
+(declare-function my/gptel--assert-readable-path "my-gptel-tools" (path))
+(declare-function my/gptel--delete-dups-stable "my-gptel-tools" (items))
+(declare-function my/gptel--ignore-globs "my-gptel-tools" ())
 (declare-function my/gptel--project-root "my-gptel-tools" ())
+(declare-function my/gptel--session-scope "my-gptel-tools" ())
+(declare-function my/gptel--split-property-entries "my-gptel-tools" (value))
+(declare-function my/gptel--relevant-buffers "my-gptel-tools" ())
 
 (defvar my/gptel-relevant-buffers nil
   "List of buffers marked relevant for gptel buffer tools.")
@@ -44,7 +50,14 @@ Relies on:
   - `my/gptel-write-root'
 
 These must be defined in `my-gptel-tools.el`."
-  (let* ((roots (ignore-errors (my/gptel--allowed-roots)))
+  (let* ((scope (ignore-errors (my/gptel--session-scope)))
+         (roots (plist-get scope :allowed-roots))
+         (relevant-buffers (plist-get scope :relevant-buffers))
+         (ignore-globs (plist-get scope :ignore-globs))
+         (scoped-p (plist-get scope :scoped-p))
+         (inherit-default-roots (plist-get scope :inherit-default-roots))
+         (topic-heading (plist-get scope :topic-heading))
+         (topic-id (plist-get scope :topic-id))
          (cwd   (or (ignore-errors (my/gptel--project-root))
                     default-directory))
          (write-root (or (and (boundp 'my/gptel-write-root) my/gptel-write-root)
@@ -77,12 +90,30 @@ These must be defined in `my-gptel-tools.el`."
       "- Code must be complete and executable."
       "- Respect the Python style requirements below."
       ""
+      (format "Session scope: %s" (if scoped-p "active" "default"))
+      (format "Session topic: %s"
+              (or (and topic-heading topic-id
+                       (format "%s [GPTEL_TOPIC=%s]" topic-heading topic-id))
+                  topic-heading
+                  topic-id
+                  "(none)"))
+      (format "Inherit default roots: %s"
+              (if inherit-default-roots "yes" "no"))
       (format "Allowed roots: %s"
               (if roots
                   (string-join roots ", ")
                 "None"))
+      (format "Relevant buffers: %s"
+              (if relevant-buffers
+                  (string-join relevant-buffers ", ")
+                "(none)"))
+      (format "Ignore globs: %s"
+              (if ignore-globs
+                  (string-join ignore-globs ", ")
+                "(none)"))
       (format "Current working project: %s" cwd)
       (format "Active write root: %s" write-root)
+      "Treat ignored-glob paths as off-limits even if they are mentioned elsewhere."
       "Mutating tools are only available in the editing preset."
       "When mutating tools are enabled, writes require an explicit write root,"
       "a GPTEL_WRITE_ROOT Org property, or a first-target git repo inference."
@@ -126,6 +157,13 @@ These must be defined in `my-gptel-tools.el`."
 (defvar my/gptel-ref-history nil
   "Recently referenced files for gptel (absolute paths, canonicalized).")
 
+(defconst my/gptel-session-scope-properties
+  '("GPTEL_ALLOWED_ROOTS"
+    "GPTEL_RELEVANT_BUFFERS"
+    "GPTEL_IGNORE_GLOBS"
+    "GPTEL_INHERIT_DEFAULT_ROOTS")
+  "Org properties used for gptel session scoping.")
+
 (defun my/gptel--canon-file (path)
   "Canonicalize PATH for stable de-duplication."
   (file-truename (expand-file-name path)))
@@ -166,10 +204,10 @@ With a prefix argument, prompt for a file."
            (buffer-file-name (buffer-base-buffer)))))
   (unless path
     (user-error "Current buffer is not visiting a file"))
-  (unless (ignore-errors (my/gptel--allowed-path-p path))
-    (user-error "File not under allowed roots: %s (allowed roots: %s)"
-                (my/gptel--canon-file path)
-                (string-join (my/gptel--allowed-roots) ", ")))
+  (condition-case err
+      (my/gptel--assert-readable-path path)
+    (user-error
+     (user-error "%s" (cadr err))))
   (my/gptel--remember-ref path)
   (let ((rel (my/gptel--best-relative-path path)))
     ;; Avoid list bullets; keep it as plain lines.
@@ -192,7 +230,7 @@ With a prefix argument, prompt for a file."
                 (mapcar (lambda (b)
                           (with-current-buffer b
                             (when-let ((f (buffer-file-name (buffer-base-buffer))))
-                              (when (ignore-errors (my/gptel--allowed-path-p f))
+                              (when (ignore-errors (my/gptel--assert-readable-path f))
                                 (my/gptel--canon-file f)))))
                         (buffer-list))))
          (files (delete-dups files)))
@@ -238,8 +276,10 @@ With a prefix argument, prompt for a file."
   "Show buffers currently marked relevant for gptel."
   (interactive)
   (message "Relevant buffers: %s"
-           (if my/gptel-relevant-buffers
-               (string-join my/gptel-relevant-buffers ", ")
+           (if-let ((buffers (ignore-errors (my/gptel--relevant-buffers))))
+               (if buffers
+                   (string-join buffers ", ")
+                 "(none)")
              "(none)")))
 
 (defun my/gptel-mark-project-buffers-relevant ()
@@ -254,6 +294,145 @@ With a prefix argument, prompt for a file."
           (my/gptel-mark-buffer-relevant b)
           (cl-incf n))))
     (message "Marked %d project buffers relevant" n)))
+
+(defmacro my/gptel--with-current-topic (&rest body)
+  "Run BODY from the current level-2 topic heading."
+  (declare (indent 0) (debug t))
+  `(progn
+     (unless (derived-mode-p 'org-mode)
+       (user-error "Not in Org mode"))
+     (unless (my/gptel--goto-current-topic)
+       (user-error "Not inside a gptel topic subtree"))
+     ,@body))
+
+(defun my/gptel--topic-property-value (property)
+  "Return PROPERTY from the current gptel topic."
+  (my/gptel--with-current-topic
+    (org-entry-get nil property)))
+
+(defun my/gptel--set-topic-property-value (property value)
+  "Set PROPERTY to VALUE on the current gptel topic."
+  (my/gptel--with-current-topic
+    (org-set-property property value)))
+
+(defun my/gptel--delete-topic-property (property)
+  "Delete PROPERTY from the current gptel topic."
+  (my/gptel--with-current-topic
+    (org-delete-property property)))
+
+(defun my/gptel--session-property-entries (property)
+  "Return whitespace-separated PROPERTY entries from the current topic."
+  (my/gptel--split-property-entries (or (my/gptel--topic-property-value property) "")))
+
+(defun my/gptel--format-session-property-entries (entries)
+  "Format session scope property ENTRIES as whitespace-separated text."
+  (string-join
+   (mapcar (lambda (entry)
+             (if (string-match-p "[[:space:]\"'\\\\]" entry)
+                 (prin1-to-string entry)
+               entry))
+           (my/gptel--delete-dups-stable (delq nil entries)))
+   " "))
+
+(defun my/gptel--buffer-scope-entry (&optional buffer)
+  "Return a whitespace-safe scope entry for BUFFER."
+  (let* ((buffer (or buffer (current-buffer)))
+         (name (buffer-name buffer)))
+    name))
+
+(defun my/gptel--live-buffer-scope-candidates ()
+  "Return live buffer names for scope completion."
+  (my/gptel--delete-dups-stable
+   (delq nil
+         (mapcar (lambda (buffer)
+                   (buffer-name buffer))
+                 (buffer-list)))))
+
+(defun my/gptel-set-session-allowed-roots (roots)
+  "Set `GPTEL_ALLOWED_ROOTS' on the current gptel topic to ROOTS."
+  (interactive
+   (list
+    (let (roots done)
+      (while (not done)
+        (push (read-directory-name "Allowed root: " nil nil t) roots)
+        (setq done (not (y-or-n-p "Add another root? "))))
+      (nreverse roots))))
+  (my/gptel--set-topic-property-value
+   "GPTEL_ALLOWED_ROOTS"
+   (my/gptel--format-session-property-entries roots))
+  (my/gptel-describe-session-scope))
+
+(defun my/gptel-toggle-session-inherit-default-roots ()
+  "Toggle `GPTEL_INHERIT_DEFAULT_ROOTS' on the current gptel topic."
+  (interactive)
+  (let* ((scope (my/gptel--session-scope))
+         (inherit-default-roots (plist-get scope :inherit-default-roots))
+         (next-value (if inherit-default-roots "nil" "yes")))
+    (my/gptel--set-topic-property-value "GPTEL_INHERIT_DEFAULT_ROOTS" next-value)
+    (message "GPTEL_INHERIT_DEFAULT_ROOTS -> %s" next-value)))
+
+(defun my/gptel-add-session-relevant-buffers (buffers)
+  "Append BUFFERS to `GPTEL_RELEVANT_BUFFERS' on the current gptel topic."
+  (interactive
+   (list (completing-read-multiple
+          "Relevant buffers: "
+          (my/gptel--live-buffer-scope-candidates)
+          nil t)))
+  (let ((entries (append (my/gptel--session-property-entries "GPTEL_RELEVANT_BUFFERS")
+                         buffers)))
+    (my/gptel--set-topic-property-value
+     "GPTEL_RELEVANT_BUFFERS"
+     (my/gptel--format-session-property-entries entries)))
+  (my/gptel-describe-session-scope))
+
+(defun my/gptel-set-session-relevant-buffers (buffers)
+  "Replace `GPTEL_RELEVANT_BUFFERS' on the current gptel topic with BUFFERS."
+  (interactive
+   (list (completing-read-multiple
+          "Relevant buffers: "
+          (my/gptel--live-buffer-scope-candidates)
+          nil t)))
+  (if buffers
+      (my/gptel--set-topic-property-value
+       "GPTEL_RELEVANT_BUFFERS"
+       (my/gptel--format-session-property-entries buffers))
+    (my/gptel--delete-topic-property "GPTEL_RELEVANT_BUFFERS"))
+  (my/gptel-describe-session-scope))
+
+(defun my/gptel-add-current-buffer-to-session-scope (&optional buffer)
+  "Append BUFFER to `GPTEL_RELEVANT_BUFFERS' on the current topic.
+
+When called interactively from an Org topic, default to the most recent other
+buffer, since the current buffer is often the chat buffer itself."
+  (interactive
+   (list (let ((default-buffer (if (derived-mode-p 'org-mode)
+                                   (other-buffer (current-buffer) t)
+                                 (current-buffer))))
+           (get-buffer
+            (completing-read "Buffer to add: "
+                             (my/gptel--live-buffer-scope-candidates)
+                             nil t (buffer-name default-buffer))))))
+  (my/gptel-add-session-relevant-buffers
+   (list (my/gptel--buffer-scope-entry (or buffer (current-buffer))))))
+
+(defun my/gptel-add-session-ignore-globs (globs)
+  "Append GLOBS to `GPTEL_IGNORE_GLOBS' on the current gptel topic."
+  (interactive
+   (list (my/gptel--split-property-entries
+          (read-string "Ignore globs (space-separated): "))))
+  (let ((entries (append (my/gptel--session-property-entries "GPTEL_IGNORE_GLOBS")
+                         globs)))
+    (my/gptel--set-topic-property-value
+     "GPTEL_IGNORE_GLOBS"
+     (my/gptel--format-session-property-entries entries)))
+  (my/gptel-describe-session-scope))
+
+(defun my/gptel-clear-session-scope-properties ()
+  "Clear all gptel session-scope properties from the current topic."
+  (interactive)
+  (dolist (property my/gptel-session-scope-properties)
+    (my/gptel--delete-topic-property property))
+  (message "Cleared gptel session scope properties"))
 
 ;;; ------------------------------------------------------------------
 ;;; Topic Enforcement
@@ -285,8 +464,8 @@ Returns non-nil if found."
           (progn
             ;; If inside a heading/subtree, climb up to level 2.
             (org-back-to-heading t)
-            (while (and (org-up-heading-safe)
-                        (> (org-current-level) 2)))
+            (while (> (org-current-level) 2)
+              (org-up-heading-safe))
             (when (= (org-current-level) 2) t))
         (error nil)))))
 
