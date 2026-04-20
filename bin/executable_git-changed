@@ -62,8 +62,23 @@ NOTES
 EOF
 }
 
+git_changed_default_base() {
+    local candidate
+    for candidate in devel origin/devel main origin/main master origin/master; do
+        if git rev-parse --verify --quiet "$candidate" >/dev/null; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+
+    echo "Could not determine a default base branch." >&2
+    echo "Tried: devel, origin/devel, main, origin/main, master, origin/master" >&2
+    echo "Use: git-changed -r <base-or-range> ..." >&2
+    return 1
+}
+
 git_changed_files() {
-    local spec="${1:-origin/devel}"
+    local spec="$1"
     shift || true
 
     local range
@@ -77,7 +92,7 @@ git_changed_files() {
 }
 
 main() {
-    local spec="origin/devel"
+    local spec=""
     local print0=0
     local -a pathspecs=()
     local -a cmd=()
@@ -118,6 +133,10 @@ main() {
                 ;;
         esac
     done
+
+    if [[ -z "$spec" ]]; then
+        spec="$(git_changed_default_base)" || return 1
+    fi
 
     local -a files=()
     mapfile -d '' -t files < <(git_changed_files "$spec" "${pathspecs[@]}")

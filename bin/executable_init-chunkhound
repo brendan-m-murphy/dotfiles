@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+CONFIG_FILE=".chunkhound.json"
+
+FORCE=0
+if [[ "${1:-}" == "--force" ]]; then
+  FORCE=1
+fi
+
+if [[ -f "$CONFIG_FILE" && "$FORCE" -ne 1 ]]; then
+  echo "Refusing to overwrite existing $CONFIG_FILE"
+  echo "Use --force to overwrite"
+  exit 1
+fi
+
+cat > "$CONFIG_FILE" <<'JSON'
+{
+  "embedding": {
+    "provider": "openai",
+    "model": "text-embedding-3-large"
+  },
+  "llm": {
+    "provider": "codex-cli"
+  }
+}
+JSON
+
+echo "Wrote $CONFIG_FILE"
