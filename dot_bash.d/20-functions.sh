@@ -54,3 +54,11 @@ ch() {
       ;;
   esac
 }
+
+# make it easier to convert markdown to org
+md2org() {
+  pandoc -f markdown+lists_without_preceding_blankline-auto_identifiers \
+         -t org \
+         --wrap=preserve \
+         "$@"
+}
