@@ -350,6 +350,21 @@
   (advice-add 'jupyter-org--define-key-filter :around #'my-jupyter-org--define-key-filter)
   (setq jupyter-repl-maximum-output 5000))
 
+
+(defun my/jupyter-force-unfreeze-src-block ()
+  "Force-remove overlays and text properties from the Org src block at point."
+  (interactive)
+  (unless (org-in-src-block-p t)
+    (user-error "Point is not inside a source block"))
+  (let* ((element (org-element-at-point))
+         (beg (org-element-property :begin element))
+         (end (org-element-property :end element))
+         (inhibit-read-only t)
+         (inhibit-modification-hooks t))
+    (remove-overlays beg end)
+    (set-text-properties beg end nil)
+    (message "Cleared overlays/text properties from src block")))
+
 ;; MAGIT
 
 (defun my/gh-current-pr-comments-to-kill-ring ()
