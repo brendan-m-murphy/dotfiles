@@ -76,7 +76,7 @@ It will:
 
 1. find the task root
 2. resolve =REPO_PATH= from the task, inherited Org properties, or an interactive prompt
-3. derive =BRANCH=, =WORKSPACE=, and =WORKTREE= if missing
+3. derive =BRANCH=, =WORKSPACE=, =WORKTREE=, and =GPTEL_TOPIC= if missing
 4. create or switch to the task workspace and worktree
 
 This is the right entry point for private config work or any task that should
@@ -138,6 +138,18 @@ It will:
 6. open the worktree directory
 7. open =magit-status= in that worktree
 
+*** =M-x my/task-insert-skeleton=
+
+Insert a small level-2 task skeleton at point with a =CREATED= timestamp,
+derived =GPTEL_TOPIC=, and child headings for notes, acceptance criteria,
+prompt, and outcome.
+
+*** =M-x my/task-report-active-repo-tasks=
+
+Show a lightweight report of active repo-plan tasks from =repo-plans/*.org=.
+The report lists the file, line, TODO state, title, issue/PR, branch, and
+=NEXT_ACTION= when present.
+
 ** Naming rules
 
 If =GH_ISSUE= exists:
@@ -166,17 +178,29 @@ Example:
 The workflow reads and writes these Org properties on the task heading:
 
 - =REPO_PATH=
+- =DEFAULT_BASE_BRANCH=
 - =GH_ISSUE=
 - =GH_URL=
+- =PR=
 - =BRANCH=
 - =WORKTREE=
 - =WORKSPACE=
+- =GPTEL_TOPIC=
+- =NEXT_ACTION=
+- =CREATED=
+- =LAST_REVIEWED=
 
-=REPO_PATH= may also be provided once per file using:
+=REPO_PATH= and =DEFAULT_BASE_BRANCH= may also be provided once per file using:
 
 #+begin_src org
 #+PROPERTY: REPO_PATH ~/Documents/openghg_inversions
+#+PROPERTY: DEFAULT_BASE_BRANCH devel
 #+end_src
+
+When creating a new branch, the task workflow checks that the source repo is on
+the configured base branch, or one of =main=, =devel=, =develop=, or =master= if
+no explicit default is configured. If the branch has an upstream and is behind
+it, branch creation is refused.
 
 ** Assumptions
 

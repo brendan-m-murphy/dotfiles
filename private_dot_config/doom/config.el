@@ -71,6 +71,79 @@
             (concat org-directory "home/important_dates.org")
             (concat org-directory "home/renovation.org")))
 
+(defun my/org-path (path)
+  "Return PATH expanded under `org-directory'."
+  (expand-file-name path org-directory))
+
+(defun my/org-repo-plan-files ()
+  "Return repo-plan Org files for review commands."
+  (let ((repo-plans (my/org-path "repo-plans/")))
+    (when (file-directory-p repo-plans)
+      (directory-files repo-plans t "\\.org\\'"))))
+
+(defvar my/org-agenda-personal-files
+  (mapcar #'my/org-path
+          '("inbox.org"
+            "todo.org"
+            "home.org"
+            "home/important_dates.org"
+            "home/renovation.org"))
+  "Files used for the personal daily agenda check.")
+
+(defvar my/org-agenda-work-files
+  (mapcar #'my/org-path
+          '("inbox.org"
+            "work/todo.org"
+            "work/meeting_notes.org"))
+  "Files used for the work daily agenda check.")
+
+(defvar my/org-agenda-inbox-files
+  (mapcar #'my/org-path
+          '("inbox.org"
+            "notes.org"
+            "todo.org"
+            "work/todo.org"))
+  "Files used for inbox triage.")
+
+(defvar my/org-agenda-review-files
+  (append org-agenda-files (my/org-repo-plan-files))
+  "Files used for weekly review.")
+
+(setq org-agenda-custom-commands
+      `(("p" "Personal daily check"
+         ((agenda "" ((org-agenda-files ',my/org-agenda-personal-files)
+                      (org-agenda-span 1)
+                      (org-agenda-overriding-header "Personal schedule")))
+          (todo "TODO" ((org-agenda-files ',my/org-agenda-personal-files)
+                        (org-agenda-overriding-header "Personal TODOs")))))
+
+        ("w" "Work daily check"
+         ((agenda "" ((org-agenda-files ',my/org-agenda-work-files)
+                      (org-agenda-span 1)
+                      (org-agenda-overriding-header "Work schedule")))
+          (todo "TODO" ((org-agenda-files ',my/org-agenda-work-files)
+                        (org-agenda-overriding-header "Work TODOs")))))
+
+        ("i" "Inbox triage"
+         ((todo "TODO" ((org-agenda-files ',my/org-agenda-inbox-files)
+                        (org-agenda-overriding-header "Captured TODOs")))
+          (search "CREATED" ((org-agenda-files ',my/org-agenda-inbox-files)
+                             (org-agenda-overriding-header "Captured notes and headings")))))
+
+        ("r" "Weekly review"
+         ((agenda "" ((org-agenda-files ',my/org-agenda-review-files)
+                      (org-agenda-span 14)
+                      (org-agenda-start-day "-7d")
+                      (org-agenda-overriding-header "Recent and overdue schedule")))
+          (tags-todo "TODO=\"WAIT\"|TODO=\"HOLD\""
+                     ((org-agenda-files ',my/org-agenda-review-files)
+                      (org-agenda-overriding-header "Waiting and held tasks")))
+          (tags-todo "TODO=\"TODO\"|TODO=\"PROJ\""
+                     ((org-agenda-files ',my/org-agenda-review-files)
+                      (org-agenda-overriding-header "Active tasks and projects")))
+          (todo "SOMEDAY" ((org-agenda-files ',my/org-agenda-review-files)
+                           (org-agenda-overriding-header "Someday/maybe")))))))
+
 ;; Refile is central to processing inbox items. Keep `C-c C-w' bound explicitly.
 (map! :after org
       "C-c C-w" #'org-refile)
@@ -152,8 +225,8 @@
          "* %U %?\n")))
 
 ;; org github links
-;; (use-package! org-gh
-;;   :after org)
+(use-package! org-gh
+  :after org)
 
 ;; stop huge org-babel results blocks
 (defcustom my/org-babel-max-result-chars 50000

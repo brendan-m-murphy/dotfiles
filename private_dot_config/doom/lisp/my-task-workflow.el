@@ -26,8 +26,30 @@
   :type 'integer
   :group 'my/task-workflow)
 
+(defcustom my/task-default-base-branches '("main" "devel" "develop" "master")
+  "Branch names accepted as safe bases for new task branches.
+A task or file can override this with DEFAULT_BASE_BRANCH."
+  :type '(repeat string)
+  :group 'my/task-workflow)
+
+(defcustom my/task-report-states '("TODO" "PROJ" "WAIT" "HOLD")
+  "TODO states included in the active repo-task report."
+  :type '(repeat string)
+  :group 'my/task-workflow)
+
 (defconst my/task-properties
-  '("REPO_PATH" "GH_ISSUE" "GH_URL" "BRANCH" "WORKTREE" "WORKSPACE")
+  '("REPO_PATH"
+    "DEFAULT_BASE_BRANCH"
+    "GH_ISSUE"
+    "GH_URL"
+    "PR"
+    "BRANCH"
+    "WORKTREE"
+    "WORKSPACE"
+    "GPTEL_TOPIC"
+    "NEXT_ACTION"
+    "CREATED"
+    "LAST_REVIEWED")
   "Task properties managed by the task workflow.")
 
 (defun my/task--task-heading-level-p (&optional level)
@@ -62,11 +84,19 @@ The task root is the nearest ancestor heading at `my/task-heading-level'."
   "Return the current heading title without TODO/priority/tags."
   (org-get-heading t t t t))
 
-(defun my/task--heading-slug ()
-  "Return a slug derived from the current task heading."
-  (let* ((title (downcase (my/task--heading-title)))
+(defun my/task--slugify (title)
+  "Return a slug derived from TITLE."
+  (let* ((title (downcase title))
          (slug (replace-regexp-in-string "[^[:alnum:]]+" "-" title)))
     (string-trim slug "-" "-")))
+
+(defun my/task--heading-slug ()
+  "Return a slug derived from the current task heading."
+  (my/task--slugify (my/task--heading-title)))
+
+(defun my/task--org-timestamp-now ()
+  "Return the current time as an inactive Org timestamp string."
+  (format-time-string "[%Y-%m-%d %a %H:%M]"))
 
 (defun my/task--get-property (property &optional inherit)
   "Return PROPERTY from the current task heading.
@@ -85,6 +115,11 @@ When INHERIT is non-nil, allow Org property inheritance."
                    (regexp-quote property))
            nil t)
       (string-trim (match-string-no-properties 1)))))
+
+(defun my/task--get-property-or-file (property &optional inherit)
+  "Return PROPERTY from the current heading, inherited headings, or file keyword."
+  (or (my/task--get-property property inherit)
+      (my/task--file-property property)))
 
 (defun my/task--set-property (property value)
   "Set PROPERTY to VALUE on the current task heading."
@@ -238,6 +273,49 @@ The stored value is always normalized to the repo root."
   "Derive a worktree path from REPO-PATH and WORKSPACE."
   (expand-file-name workspace (my/task--worktree-root repo-path)))
 
+(defun my/task--current-branch (repo-path)
+  "Return the current branch name in REPO-PATH."
+  (let ((default-directory repo-path))
+    (my/task--call-process-string "git" "branch" "--show-current")))
+
+(defun my/task--upstream-branch (repo-path branch)
+  "Return BRANCH's upstream branch in REPO-PATH, or nil if it has none."
+  (let ((default-directory repo-path))
+    (with-temp-buffer
+      (when (zerop (process-file "git" nil (current-buffer) nil
+                                 "rev-parse" "--abbrev-ref"
+                                 (format "%s@{upstream}" branch)))
+        (let ((upstream (string-trim (buffer-string))))
+          (unless (string-empty-p upstream)
+            upstream))))))
+
+(defun my/task--branch-behind-count (repo-path branch upstream)
+  "Return how many commits BRANCH is behind UPSTREAM in REPO-PATH."
+  (let* ((default-directory repo-path)
+         (output (my/task--call-process-string
+                  "git" "rev-list" "--left-right" "--count"
+                  (format "%s...%s" branch upstream)))
+         (counts (split-string output "[ \t\n]+" t)))
+    (string-to-number (or (cadr counts) "0"))))
+
+(defun my/task--assert-base-ready (repo-path base-branch)
+  "Signal if REPO-PATH is not on a safe, up-to-date task base branch."
+  (let* ((current (my/task--current-branch repo-path))
+         (allowed (if base-branch
+                      (list base-branch)
+                    my/task-default-base-branches)))
+    (unless (member current allowed)
+      (user-error "Refusing to create task branch from %s; expected one of: %s"
+                  (if (string-empty-p current) "detached HEAD" current)
+                  (string-join allowed ", ")))
+    (if-let ((upstream (my/task--upstream-branch repo-path current)))
+        (let ((behind (my/task--branch-behind-count repo-path current upstream)))
+          (when (> behind 0)
+            (user-error "Refusing to create task branch: %s is %d commits behind %s"
+                        current behind upstream)))
+      (message "No upstream configured for %s; remote freshness was not checked"
+               current))))
+
 (defun my/task--parse-gh-issue-output (output)
   "Parse gh issue creation OUTPUT into a plist."
   (let ((trimmed (string-trim output)))
@@ -329,8 +407,10 @@ The stored value is always normalized to the repo root."
               (string-equal (file-name-as-directory (file-truename worktree)) git-root)
               (my/task--repo-has-worktree-p repo-path worktree)))))
 
-(defun my/task--ensure-worktree (repo-path branch worktree)
-  "Ensure WORKTREE exists for BRANCH in REPO-PATH."
+(defun my/task--ensure-worktree (repo-path branch worktree &optional base-branch)
+  "Ensure WORKTREE exists for BRANCH in REPO-PATH.
+When creating a new branch, require the current repo branch to be an accepted
+base branch. BASE-BRANCH overrides `my/task-default-base-branches'."
   (let ((worktree-root (my/task--worktree-root repo-path))
         (default-directory repo-path))
     (make-directory worktree-root t)
@@ -342,6 +422,7 @@ The stored value is always normalized to the repo root."
      ((my/task--branch-exists-p repo-path branch)
       (my/task--call-process-string "git" "worktree" "add" worktree branch))
      (t
+      (my/task--assert-base-ready repo-path base-branch)
       (my/task--call-process-string "git" "worktree" "add" "-b" branch worktree "HEAD"))))
   worktree)
 
@@ -375,6 +456,8 @@ The stored value is always normalized to the repo root."
          (repo-name (my/task--repo-name repo-path))
          (issue (my/task--get-property "GH_ISSUE" nil))
          (slug (my/task--heading-slug))
+         (gptel-topic (my/task--get-property "GPTEL_TOPIC" nil))
+         (created (my/task--get-property "CREATED" nil))
          (workspace-prop (my/task--get-property "WORKSPACE" nil))
          (branch-prop (my/task--get-property "BRANCH" nil))
          (worktree-prop (my/task--get-property "WORKTREE" nil))
@@ -385,10 +468,16 @@ The stored value is always normalized to the repo root."
          (worktree (or worktree-prop
                        (my/task--derive-worktree repo-path workspace))))
     (list :repo_path repo-path
+          :default_base_branch (my/task--get-property-or-file "DEFAULT_BASE_BRANCH" t)
           :repo_name repo-name
           :gh_issue issue
           :gh_url (my/task--get-property "GH_URL" nil)
+          :pr (my/task--get-property "PR" nil)
           :slug slug
+          :gptel_topic (or gptel-topic slug)
+          :next_action (my/task--get-property "NEXT_ACTION" nil)
+          :created (or created (my/task--org-timestamp-now))
+          :last_reviewed (my/task--get-property "LAST_REVIEWED" nil)
           :workspace_explicit workspace-prop
           :branch_explicit branch-prop
           :worktree_explicit worktree-prop
@@ -405,8 +494,9 @@ The stored value is always normalized to the repo root."
   (let ((repo-path (plist-get metadata :repo_path))
         (branch (plist-get metadata :branch))
         (worktree (plist-get metadata :worktree))
-        (workspace (plist-get metadata :workspace)))
-    (my/task--ensure-worktree repo-path branch worktree)
+        (workspace (plist-get metadata :workspace))
+        (base-branch (plist-get metadata :default_base_branch)))
+    (my/task--ensure-worktree repo-path branch worktree base-branch)
     (my/task--write-derived-properties metadata)
     (my/task--switch-workspace workspace)
     (my/task--open-worktree worktree)
@@ -515,6 +605,109 @@ The stored value is always normalized to the repo root."
             (delete-file body-file))))
       (my/task--write-derived-properties metadata)))
   (my/task-open))
+
+;;;###autoload
+(defun my/task-insert-skeleton (title)
+  "Insert a new repo-plan task skeleton with TITLE at point."
+  (interactive "sTask title: ")
+  (let ((slug (my/task--slugify title))
+        (stars (make-string my/task-heading-level ?*))
+        (created (my/task--org-timestamp-now)))
+    (unless (bolp)
+      (insert "\n"))
+    (insert (format "%s TODO %s\n" stars title)
+            ":PROPERTIES:\n"
+            (format ":CREATED: %s\n" created)
+            (format ":GPTEL_TOPIC: %s\n" slug)
+            ":END:\n\n"
+            (make-string (1+ my/task-heading-level) ?*) " Notes\n\n"
+            (make-string (1+ my/task-heading-level) ?*) " Acceptance criteria\n\n"
+            (make-string (1+ my/task-heading-level) ?*) " Prompt\n\n"
+            (make-string (1+ my/task-heading-level) ?*) " Outcome\n\n")))
+
+(defun my/task--repo-plan-files ()
+  "Return repo-plan Org files under `org-directory'."
+  (let ((repo-plans (expand-file-name "repo-plans" org-directory)))
+    (when (file-directory-p repo-plans)
+      (directory-files repo-plans t "\\.org\\'"))))
+
+(defun my/task--clean-heading-title (title)
+  "Return TITLE without trailing Org tags."
+  (string-trim
+   (replace-regexp-in-string
+    "[ \t]+:\\(?:[[:alnum:]_@#%]+:\\)+[ \t]*\\'" "" title)))
+
+(defun my/task--property-in-region (beg end property)
+  "Return PROPERTY value between BEG and END."
+  (save-excursion
+    (goto-char beg)
+    (let ((case-fold-search nil)
+          (pattern (format "^[ \t]*:%s:[ \t]*\\(.*\\)$"
+                           (regexp-quote property)))
+          (value nil))
+      (while (and (not value) (re-search-forward pattern end t))
+        (let ((trimmed (string-trim (match-string-no-properties 1))))
+          (unless (string-empty-p trimmed)
+            (setq value trimmed))))
+      value)))
+
+(defun my/task--active-headings-in-file (file)
+  "Return active task rows from repo-plan FILE."
+  (with-temp-buffer
+    (insert-file-contents file)
+    (let ((rows nil))
+      (goto-char (point-min))
+      (while (re-search-forward "^\\*+ +\\([[:upper:]][[:upper:]_@#%0-9-]*\\)\\(?: +\\(.*\\)\\)?$" nil t)
+        (let ((state (match-string-no-properties 1))
+              (title (my/task--clean-heading-title
+                      (or (match-string-no-properties 2) "")))
+              (body-beg (line-end-position))
+              (body-end (save-excursion
+                          (if (re-search-forward org-heading-regexp nil t)
+                              (line-beginning-position)
+                            (point-max)))))
+          (when (member state my/task-report-states)
+            (push (list :file file
+                        :line (line-number-at-pos)
+                        :state state
+                        :title title
+                        :issue (my/task--property-in-region body-beg body-end "GH_ISSUE")
+                        :pr (my/task--property-in-region body-beg body-end "PR")
+                        :branch (my/task--property-in-region body-beg body-end "BRANCH")
+                        :next (my/task--property-in-region body-beg body-end "NEXT_ACTION"))
+                  rows))))
+      (nreverse rows))))
+
+;;;###autoload
+(defun my/task-report-active-repo-tasks ()
+  "Show active repo-plan tasks grouped by repo file."
+  (interactive)
+  (let ((rows (mapcan #'my/task--active-headings-in-file
+                      (my/task--repo-plan-files))))
+    (with-current-buffer (get-buffer-create "*Org Repo Tasks*")
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert "Active repo tasks\n\n")
+        (if rows
+            (dolist (row rows)
+              (insert (format "%s:%s  %-6s  %s\n"
+                              (file-relative-name (plist-get row :file) org-directory)
+                              (plist-get row :line)
+                              (plist-get row :state)
+                              (plist-get row :title)))
+              (when-let ((issue (plist-get row :issue)))
+                (insert (format "  issue: %s\n" issue)))
+              (when-let ((pr (plist-get row :pr)))
+                (insert (format "  pr: %s\n" pr)))
+              (when-let ((branch (plist-get row :branch)))
+                (insert (format "  branch: %s\n" branch)))
+              (when-let ((next (plist-get row :next)))
+                (insert (format "  next: %s\n" next)))
+              (insert "\n"))
+          (insert "No active repo tasks found.\n"))
+        (goto-char (point-min))
+        (view-mode 1)))
+    (pop-to-buffer "*Org Repo Tasks*")))
 
 (provide 'my-task-workflow)
 

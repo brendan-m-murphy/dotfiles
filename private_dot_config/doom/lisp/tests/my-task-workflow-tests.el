@@ -154,6 +154,9 @@
           (should (equal (my/task--get-property "REPO_PATH" nil) repo-path))
           (should (equal (my/task--get-property "WORKSPACE" nil)
                          (format "%s-task-basis-operator-phase-1" repo-name)))
+          (should (equal (my/task--get-property "GPTEL_TOPIC" nil)
+                         "basis-operator-phase-1"))
+          (should (my/task--get-property "CREATED" nil))
           (should (equal (my/task--get-property "BRANCH" nil)
                          "basis-operator-phase-1"))
           (should (equal (my/task--get-property "WORKTREE" nil)
@@ -223,6 +226,8 @@
                (lambda (_path) nil))
               ((symbol-function 'my/task--branch-exists-p)
                (lambda (_repo _branch) nil))
+              ((symbol-function 'my/task--assert-base-ready)
+               (lambda (_repo _base) nil))
               ((symbol-function 'my/task--call-process-string)
                (lambda (program &rest args)
                  (push (cons program args) commands)
@@ -233,7 +238,52 @@
       (should (equal created-dir "/tmp/openghg_inversions-wt"))
       (should (equal (car commands)
                      '("git" "worktree" "add" "-b" "issue-417-basis-operator-phase-1"
-                       "/tmp/openghg_inversions-wt/openghg_inversions-iss-417" "HEAD"))))))
+                      "/tmp/openghg_inversions-wt/openghg_inversions-iss-417" "HEAD"))))))
+
+(ert-deftest my/task-ensure-worktree-checks-base-before-new-branch ()
+  (let ((checked nil))
+    (cl-letf (((symbol-function 'make-directory) (lambda (&rest _) nil))
+              ((symbol-function 'file-directory-p) (lambda (_path) nil))
+              ((symbol-function 'my/task--branch-exists-p) (lambda (&rest _) nil))
+              ((symbol-function 'my/task--assert-base-ready)
+               (lambda (repo base)
+                 (setq checked (list repo base))))
+              ((symbol-function 'my/task--call-process-string)
+               (lambda (&rest _) "")))
+      (my/task--ensure-worktree "/tmp/repo/" "task-branch" "/tmp/repo-wt/task" "devel")
+      (should (equal checked '("/tmp/repo/" "devel"))))))
+
+(ert-deftest my/task-assert-base-ready-rejects-wrong-current-branch ()
+  (cl-letf (((symbol-function 'my/task--current-branch)
+             (lambda (_repo) "feature/in-progress")))
+    (should-error (my/task--assert-base-ready "/tmp/repo/" "main")
+                  :type 'user-error)))
+
+(ert-deftest my/task-active-headings-report-parses-properties ()
+  (let ((file nil))
+    (unwind-protect
+        (progn
+          (setq file (make-temp-file "my-task-report-" nil ".org"))
+          (with-temp-file file
+            (insert "#+title: Repo\n"
+                    "** TODO Active task :ATTACH:\n"
+                    ":PROPERTIES:\n"
+                    ":GH_ISSUE: 12\n"
+                    ":PR: 34\n"
+                    ":BRANCH: issue-12-active-task\n"
+                    ":NEXT_ACTION: run tests\n"
+                    ":END:\n"
+                    "** DONE Finished task\n"))
+          (let ((rows (my/task--active-headings-in-file file)))
+            (should (= (length rows) 1))
+            (should (equal (plist-get (car rows) :state) "TODO"))
+            (should (equal (plist-get (car rows) :title) "Active task"))
+            (should (equal (plist-get (car rows) :issue) "12"))
+            (should (equal (plist-get (car rows) :pr) "34"))
+            (should (equal (plist-get (car rows) :branch) "issue-12-active-task"))
+            (should (equal (plist-get (car rows) :next) "run tests"))))
+      (when (and file (file-exists-p file))
+        (delete-file file)))))
 
 (ert-deftest my/task-ensure-worktree-uses-existing-branch ()
   (let ((commands nil))
