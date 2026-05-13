@@ -715,7 +715,9 @@
         "a n" #'my/gptel-new-entry)
   (map! :leader
         :desc "New GPT topic"
-        "a t" #'my/gptel-new-topic)
+        "a t" #'my/gptel-new-topic
+        :desc "Cleanup GPT Org headings"
+        "a h" #'my/gptel-cleanup-response-headings)
   (map! :leader
         :desc "gptel add reference (this file)" "a r" #'my/gptel-add-reference
         :desc "gptel add reference (open buffers)" "a R" #'my/gptel-add-reference-from-open-buffers
@@ -729,6 +731,9 @@
   (map! :leader
         (:prefix ("a s" . "gptel session scope")
          :desc "Set allowed roots" "r" #'my/gptel-set-session-allowed-roots
+         :desc "Add allowed roots" "a" #'my/gptel-add-session-allowed-roots
+         :desc "Add task worktree root" "w" #'my/task-add-worktree-to-gptel-allowed-roots
+         :desc "Add attachment root" "A" #'my/gptel-add-attachment-dir-to-session-allowed-roots
          :desc "Toggle inherit defaults" "i" #'my/gptel-toggle-session-inherit-default-roots
          :desc "Add relevant buffers" "b" #'my/gptel-add-session-relevant-buffers
          :desc "Set relevant buffers" "B" #'my/gptel-set-session-relevant-buffers

@@ -16,6 +16,7 @@
 (declare-function +workspace/switch-to "ext:doom-workspaces" (name &optional auto-create-p))
 (declare-function magit-status "ext:magit-status" (&optional directory cache))
 (declare-function magit-status-setup-buffer "ext:magit-status" (directory))
+(declare-function my/gptel-add-session-allowed-roots "my-gptel-org-workflow" (roots))
 
 (defgroup my/task-workflow nil
   "Task-centric Org workflow helpers."
@@ -40,6 +41,7 @@ A task or file can override this with DEFAULT_BASE_BRANCH."
 (defconst my/task-properties
   '("REPO_PATH"
     "DEFAULT_BASE_BRANCH"
+    "GH_REPO"
     "GH_ISSUE"
     "GH_URL"
     "PR"
@@ -231,15 +233,93 @@ The stored value is always normalized to the repo root."
   (let ((default (my/task--heading-title)))
     (read-string (format "Issue title (%s): " default) nil nil default)))
 
-(defun my/task--normalize-issue-reference (issue-ref)
-  "Normalize ISSUE-REF into a plist with :gh_issue and optional :gh_url."
+(defun my/task--github-issue-url (repo issue)
+  "Return the GitHub issue URL for REPO and ISSUE."
+  (format "https://github.com/%s/issues/%s" repo issue))
+
+(defun my/task--parse-github-issue-url (url)
+  "Parse a GitHub issue URL into a plist, or nil if URL is unsupported."
+  (when (string-match
+         "\\`https?://\\(?:www\\.\\)?github\\.com/\\([^/]+\\)/\\([^/]+\\)/issues/\\([0-9]+\\)/?\\'"
+         (string-trim url))
+    (let* ((trimmed (string-trim url))
+           (repo (format "%s/%s" (match-string 1 trimmed) (match-string 2 trimmed)))
+           (issue (match-string 3 trimmed)))
+      (list :gh_repo repo
+            :gh_issue issue
+            :gh_url (my/task--github-issue-url repo issue)))))
+
+(defun my/task--repo-from-git-url (url)
+  "Return owner/name parsed from GitHub remote URL, or nil."
+  (let ((trimmed (string-trim url)))
+    (cond
+     ((string-match "\\`git@github\\.com:\\([^/]+\\)/\\(.+\\)\\'" trimmed)
+      (format "%s/%s" (match-string 1 trimmed)
+              (replace-regexp-in-string "\\.git\\'" "" (match-string 2 trimmed))))
+     ((string-match "\\`ssh://git@github\\.com/\\([^/]+\\)/\\(.+\\)\\'" trimmed)
+      (format "%s/%s" (match-string 1 trimmed)
+              (replace-regexp-in-string "\\.git\\'" "" (match-string 2 trimmed))))
+     ((string-match "\\`https?://\\(?:[^/@]+@\\)?github\\.com/\\([^/]+\\)/\\(.+\\)\\'" trimmed)
+      (format "%s/%s" (match-string 1 trimmed)
+              (replace-regexp-in-string "\\.git\\'" ""
+                                        (replace-regexp-in-string "/\\'" "" (match-string 2 trimmed))))))))
+
+(defun my/task--gh-repo-from-gh (repo-path)
+  "Return owner/name for REPO-PATH using `gh repo view', or nil."
+  (when (and repo-path (executable-find "gh"))
+    (let ((default-directory repo-path))
+      (with-temp-buffer
+        (when (zerop (process-file "gh" nil (current-buffer) nil
+                                   "repo" "view" "--json" "nameWithOwner"
+                                   "--jq" ".nameWithOwner"))
+          (let ((value (string-trim (buffer-string))))
+            (unless (string-empty-p value)
+              value)))))))
+
+(defun my/task--gh-repo-from-remote (repo-path)
+  "Return owner/name for REPO-PATH using git remote.origin.url, or nil."
+  (when repo-path
+    (let ((default-directory repo-path))
+      (with-temp-buffer
+        (when (zerop (process-file "git" nil (current-buffer) nil
+                                   "config" "--get" "remote.origin.url"))
+          (my/task--repo-from-git-url (buffer-string)))))))
+
+(defun my/task--repo-path-from-properties-no-prompt ()
+  "Return a task repo path from Org properties without prompting."
+  (when-let ((repo-path (or (my/task--get-property "REPO_PATH" t)
+                            (my/task--file-property "REPO_PATH"))))
+    (let ((expanded (expand-file-name repo-path)))
+      (unless (file-remote-p expanded)
+        (if (file-directory-p expanded)
+            (or (my/task--git-root expanded)
+                (file-name-as-directory (file-truename expanded)))
+          (file-name-as-directory expanded))))))
+
+(defun my/task--resolve-gh-repo (&optional repo-path)
+  "Resolve the current task's GitHub owner/name repository.
+Resolution order is direct/inherited/file `GH_REPO', `GH_URL', `gh repo view',
+then the git origin remote."
+  (or (my/task--get-property-or-file "GH_REPO" t)
+      (when-let* ((url (my/task--get-property "GH_URL" t))
+                  (parsed (my/task--parse-github-issue-url url)))
+        (plist-get parsed :gh_repo))
+      (my/task--gh-repo-from-gh repo-path)
+      (my/task--gh-repo-from-remote repo-path)))
+
+(defun my/task--normalize-issue-reference (issue-ref &optional gh-repo)
+  "Normalize ISSUE-REF into a plist with repo, issue number, and URL.
+ISSUE-REF may be a bare number or a full GitHub issue URL.  Bare numbers need
+GH-REPO so the task can store an unambiguous `GH_URL'."
   (let ((trimmed (string-trim issue-ref)))
     (cond
      ((string-match "\\`[0-9]+\\'" trimmed)
-      (list :gh_issue trimmed))
-     ((string-match "/issues/\\([0-9]+\\)/*\\'" trimmed)
-      (list :gh_issue (match-string 1 trimmed)
-            :gh_url trimmed))
+      (unless gh-repo
+        (user-error "A bare issue number needs GH_REPO; set GH_REPO or REPO_PATH first"))
+      (list :gh_repo gh-repo
+            :gh_issue trimmed
+            :gh_url (my/task--github-issue-url gh-repo trimmed)))
+     ((my/task--parse-github-issue-url trimmed))
      (t
       (user-error "Issue reference must be a number or GitHub issue URL: %s"
                   issue-ref)))))
@@ -318,11 +398,8 @@ The stored value is always normalized to the repo root."
 
 (defun my/task--parse-gh-issue-output (output)
   "Parse gh issue creation OUTPUT into a plist."
-  (let ((trimmed (string-trim output)))
-    (unless (string-match "/issues/\\([0-9]+\\)/*\\'" trimmed)
-      (user-error "Could not parse gh issue output: %s" output))
-    (list :gh_url trimmed
-          :gh_issue (match-string 1 trimmed))))
+  (or (my/task--parse-github-issue-url (string-trim output))
+      (user-error "Could not parse gh issue output: %s" output)))
 
 (defun my/task--branch-names (repo-path)
   "Return local branch names in REPO-PATH."
@@ -455,6 +532,7 @@ base branch. BASE-BRANCH overrides `my/task-default-base-branches'."
   (let* ((repo-path (my/task--repo-path))
          (repo-name (my/task--repo-name repo-path))
          (issue (my/task--get-property "GH_ISSUE" nil))
+         (gh-repo (my/task--resolve-gh-repo repo-path))
          (slug (my/task--heading-slug))
          (gptel-topic (my/task--get-property "GPTEL_TOPIC" nil))
          (created (my/task--get-property "CREATED" nil))
@@ -470,6 +548,7 @@ base branch. BASE-BRANCH overrides `my/task-default-base-branches'."
     (list :repo_path repo-path
           :default_base_branch (my/task--get-property-or-file "DEFAULT_BASE_BRANCH" t)
           :repo_name repo-name
+          :gh_repo gh-repo
           :gh_issue issue
           :gh_url (my/task--get-property "GH_URL" nil)
           :pr (my/task--get-property "PR" nil)
@@ -502,6 +581,100 @@ base branch. BASE-BRANCH overrides `my/task-default-base-branches'."
     (my/task--open-worktree worktree)
     (my/task--magit-status worktree)))
 
+(defun my/task--derived-property-values ()
+  "Return derived task property values without prompting or creating worktrees."
+  (let* ((repo-path (my/task--repo-path-from-properties-no-prompt))
+         (repo-name (and repo-path (my/task--repo-name repo-path)))
+         (issue (my/task--get-property "GH_ISSUE" t))
+         (gh-repo (my/task--resolve-gh-repo repo-path))
+         (slug (my/task--heading-slug))
+         (workspace (and repo-name (my/task--derive-workspace repo-name issue slug)))
+         (branch (my/task--derive-branch issue slug))
+         (worktree (and repo-path workspace
+                        (my/task--derive-worktree repo-path workspace))))
+    (list (cons "REPO_PATH" repo-path)
+          (cons "GH_REPO" gh-repo)
+          (cons "GH_URL" (and gh-repo issue (my/task--github-issue-url gh-repo issue)))
+          (cons "BRANCH" branch)
+          (cons "WORKTREE" worktree)
+          (cons "WORKSPACE" workspace)
+          (cons "GPTEL_TOPIC" slug))))
+
+(defun my/task--property-snapshot ()
+  "Return managed property rows for the current task."
+  (save-excursion
+    (my/task--goto-task-root)
+    (let ((derived (my/task--derived-property-values)))
+      (mapcar
+       (lambda (property)
+         (list :property property
+               :direct (my/task--get-property property nil)
+               :inherited (my/task--get-property property t)
+               :file (my/task--file-property property)
+               :derived (cdr (assoc property derived))))
+       my/task-properties))))
+
+(defun my/task--read-managed-property (&optional prompt)
+  "Read a managed task property using PROMPT."
+  (completing-read (or prompt "Property: ") my/task-properties nil t))
+
+;;;###autoload
+(defun my/task-describe-properties ()
+  "Show direct, inherited, file-level, and derived task property values."
+  (interactive)
+  (let ((rows (my/task--property-snapshot)))
+    (with-current-buffer (get-buffer-create "*Org Task Properties*")
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert "Org task properties\n\n")
+        (dolist (row rows)
+          (insert (format "%s\n" (plist-get row :property)))
+          (dolist (field '(:direct :inherited :file :derived))
+            (insert (format "  %-9s %s\n"
+                            (substring (symbol-name field) 1)
+                            (or (plist-get row field) ""))))
+          (insert "\n"))
+        (goto-char (point-min))
+        (view-mode 1)))
+    (pop-to-buffer "*Org Task Properties*")))
+
+;;;###autoload
+(defun my/task-set-property (property value)
+  "Set managed task PROPERTY to VALUE on the current task heading."
+  (interactive
+   (let* ((property (my/task--read-managed-property "Set property: "))
+          (default (save-excursion
+                     (my/task--goto-task-root)
+                     (or (my/task--get-property property nil)
+                         (cdr (assoc property (my/task--derived-property-values)))))))
+     (list property (read-string (format "%s: " property) nil nil default))))
+  (save-excursion
+    (my/task--goto-task-root)
+    (org-entry-put nil property value)))
+
+;;;###autoload
+(defun my/task-delete-property (property)
+  "Delete managed task PROPERTY from the current task heading."
+  (interactive (list (my/task--read-managed-property "Delete property: ")))
+  (save-excursion
+    (my/task--goto-task-root)
+    (org-entry-delete nil property)))
+
+;;;###autoload
+(defun my/task-add-worktree-to-gptel-allowed-roots ()
+  "Append this task's worktree to the current gptel topic allowed roots."
+  (interactive)
+  (unless (fboundp 'my/gptel-add-session-allowed-roots)
+    (user-error "my-gptel-org-workflow is not loaded"))
+  (save-excursion
+    (my/task--goto-task-root)
+    (let* ((derived (my/task--derived-property-values))
+           (worktree (or (my/task--get-property "WORKTREE" t)
+                         (cdr (assoc "WORKTREE" derived)))))
+      (unless worktree
+        (user-error "No WORKTREE property or derived worktree for current task"))
+      (my/gptel-add-session-allowed-roots (list worktree)))))
+
 ;;;###autoload
 (defun my/task-open ()
   "Open the current task's worktree, workspace, and Magit status."
@@ -527,16 +700,37 @@ base branch. BASE-BRANCH overrides `my/task-default-base-branches'."
   (save-excursion
     (my/task--goto-task-root)
     (let* ((metadata (my/task--collect-metadata))
-           (issue-data (my/task--normalize-issue-reference issue-ref)))
+           (issue-data (my/task--normalize-issue-reference
+                        issue-ref
+                        (plist-get metadata :gh_repo))))
       (setq metadata
             (my/task--metadata-with-overrides
              metadata
+             :gh_repo (plist-get issue-data :gh_repo)
              :gh_issue (plist-get issue-data :gh_issue)
-             :gh_url (or (plist-get issue-data :gh_url)
-                         (plist-get metadata :gh_url))))
+             :gh_url (plist-get issue-data :gh_url)))
       (setq metadata (my/task--refresh-derived-metadata metadata))
       (my/task--write-derived-properties metadata)
       metadata)))
+
+;;;###autoload
+(defun my/task-insert-gh-link (issue)
+  "Insert a repo-aware `gh:owner/repo#ISSUE' Org link for the current task."
+  (interactive
+   (list
+    (save-excursion
+      (my/task--goto-task-root)
+      (read-string "Issue or PR number: "
+                   nil nil
+                   (or (my/task--get-property "GH_ISSUE" nil) "")))))
+  (let ((gh-repo (save-excursion
+                   (my/task--goto-task-root)
+                   (let ((repo-path (my/task--repo-path)))
+                     (or (my/task--resolve-gh-repo repo-path)
+                         (user-error "Could not resolve GH_REPO for current task"))))))
+    (unless (string-match-p "\\`[0-9]+\\'" (string-trim issue))
+      (user-error "Issue or PR number must be numeric: %s" issue))
+    (insert (format "[[gh:%s#%s]]" gh-repo (string-trim issue)))))
 
 ;;;###autoload
 (defun my/task-init-from-branch (branch)

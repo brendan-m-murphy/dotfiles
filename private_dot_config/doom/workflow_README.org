@@ -58,11 +58,12 @@ task is the anchor for everything else.
 Typical shape:
 
 #+begin_src org
-* Basis operator refactor
+,* Basis operator refactor
 
-** Basis operator phase 1
+,** Basis operator phase 1
 :PROPERTIES:
 :REPO_PATH: ~/Documents/openghg_inversions
+:GH_REPO: openghg/openghg_inversions
 :GH_ISSUE: 417
 :GH_URL: https://github.com/org/repo/issues/417
 :BRANCH: issue-417-basis-operator-phase-1
@@ -70,19 +71,20 @@ Typical shape:
 :WORKSPACE: openghg_inversions-iss-417
 :END:
 
-*** Notes
+,*** Notes
 Implementation notes, acceptance criteria, context, and planning.
 
-*** user prompt
+,*** user prompt
 Prompt sent to the model.
 
-*** AI response
+,*** AI response
 Model response.
 
-* Misc
-** Fix user issue 123
+,* Misc
+,** Fix user issue 123
 :PROPERTIES:
 :REPO_PATH: ~/Documents/openghg_inversions
+:GH_REPO: openghg/openghg_inversions
 :GH_ISSUE: 123
 :GH_URL: https://github.com/org/repo/issues/123
 :BRANCH: issue-123-something-is-not-working
@@ -90,13 +92,13 @@ Model response.
 :WORKSPACE: openghg_inversions-iss-123
 :END:
 
-*** Notes
+,*** Notes
 That thing broke!
 
-*** user prompt
+,*** user prompt
 Prompt sent to the model.
 
-*** AI response
+,*** AI response
 Model response.
 
 #+end_src
@@ -140,6 +142,13 @@ conversation history and working context.
 
 This means you can preserve chat history without forcing a rigid schema.
 
+=M-x my/gptel-new-entry= works from anywhere inside the current =**= topic,
+including nested prompt or response headings. =M-x my/gptel-new-topic= inserts a
+new =**= topic under the current top-level =*= section when point is not already
+inside a topic. =M-x my/gptel-cleanup-response-headings= explicitly repairs a
+selected region or current subtree when saved chats contain malformed headings
+such as =**/ Heading=.
+
 ** gptel session scope properties
 
 Within a =**= task/topic subtree, gptel can be scoped with Org properties:
@@ -158,7 +167,7 @@ with either single quotes or double quotes.
 Example:
 
 #+begin_src org
-** pymc follow-up
+,** pymc follow-up
 :PROPERTIES:
 :GPTEL_TOPIC: pymc_follow_up
 :GPTEL_ALLOWED_ROOTS: /Users/me/Documents/openghg_inversions-wt/openghg_inversions-task-stage-e-follow-up-tidying
@@ -178,6 +187,13 @@ Default inheritance behavior is conservative:
 Ignore globs are enforced both in Emacs-side path filtering and in the =rg=
 invocation, so patterns like =.venv/**= prevent both file listing and search
 results from those paths.
+
+Useful scope commands:
+
+- =M-x my/gptel-add-session-allowed-roots=: append one or more roots without replacing existing scope
+- =M-x my/task-add-worktree-to-gptel-allowed-roots=: append the current task's =WORKTREE=
+- =M-x my/gptel-add-attachment-dir-to-session-allowed-roots=: append the current heading's existing Org attachment directory; with a prefix arg, create it first
+- =M-x my/gptel-describe-session-scope=: inspect the resolved roots, buffers, and ignore globs
 
 ** Why this shape exists
 
@@ -226,7 +242,7 @@ stay local.
 - resolve the repo
 - export =Notes= to Markdown
 - create a GitHub issue with =gh=
-- store =GH_ISSUE= and =GH_URL=
+- store =GH_REPO=, =GH_ISSUE=, and =GH_URL=
 - derive =BRANCH=, =WORKTREE=, and =WORKSPACE= if needed
 - call =my/task-open=
 
@@ -240,8 +256,14 @@ It accepts either:
 - an issue number
 - a full issue URL
 
-Then it stores =GH_ISSUE= and, when available, =GH_URL=. Existing local branch,
-workspace, and worktree properties are left alone.
+Then it stores =GH_REPO=, =GH_ISSUE=, and =GH_URL=. Bare issue numbers are
+expanded into full URLs using the task's repo context, so a task for
+=openghg/openghg= records a different issue link than a task for the org repo.
+Existing local branch, workspace, and worktree properties are left alone.
+
+Use =M-x my/task-insert-gh-link= to insert an explicit =gh:owner/repo#123= Org
+link from the current task's repo context. This avoids relying on ambiguous bare
+=#123= link handling in files under =repo-plans/=.
 
 *** =M-x my/task-init-from-branch=
 
@@ -350,12 +372,12 @@ One planning file often covers a sequence of related tasks for a single repo.
 Example:
 
 #+begin_src org
-* Basis operator rewrite
+,* Basis operator rewrite
 
-** Phase 1
-** Phase 2
-** Validation
-** Cleanup
+,** Phase 1
+,** Phase 2
+,** Validation
+,** Cleanup
 #+end_src
 
 This is useful when work naturally decomposes into multiple PRs. The =*= header
@@ -541,13 +563,20 @@ Adds =gh:= Org links for GitHub issues and PRs.
 ** Properties used on task headings
 
 - =REPO_PATH=
+- =DEFAULT_BASE_BRANCH=
+- =GH_REPO=
 - =GH_ISSUE=
 - =GH_URL=
+- =PR=
 - =BRANCH=
 - =WORKTREE=
 - =WORKSPACE=
+- =GPTEL_TOPIC=
+- =NEXT_ACTION=
+- =CREATED=
+- =LAST_REVIEWED=
 
-It is also valid to define =REPO_PATH= once at file level:
+It is also valid to define =REPO_PATH=, =DEFAULT_BASE_BRANCH=, or =GH_REPO= once at file level:
 
 #+begin_src org
 #+PROPERTY: REPO_PATH ~/Documents/openghg_inversions
@@ -569,6 +598,11 @@ Today, the default is:
 - =my/task-create=: create a new issue and then open the task
 - =my/task-link-issue=: attach an existing issue to the task
 - =my/task-init-from-branch=: attach an existing local branch to the task
+- =my/task-describe-properties=: show direct, inherited, file-level, and derived property values
+- =my/task-set-property=: set a managed task property with completion
+- =my/task-delete-property=: delete a direct managed task property
+- =my/task-insert-gh-link=: insert an explicit =gh:owner/repo#123= link
+- =my/task-add-worktree-to-gptel-allowed-roots=: add the task worktree to gptel session scope
 
 That matches the current =**= task convention.
 

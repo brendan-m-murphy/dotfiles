@@ -39,11 +39,12 @@ This lets the Org task act as the entry point for planning and resuming work.
 The workflow assumes a task subtree like this:
 
 #+begin_src org
-* Basis operator updates
+,* Basis operator updates
 
-** Basis operator phase 1
+,** Basis operator phase 1
 :PROPERTIES:
 :REPO_PATH: ~/Documents/openghg_inversions
+:GH_REPO: openghg/openghg_inversions
 :GH_ISSUE: 417
 :GH_URL: https://github.com/org/repo/issues/417
 :BRANCH: issue-417-basis-operator-phase-1
@@ -51,13 +52,13 @@ The workflow assumes a task subtree like this:
 :WORKSPACE: openghg_inversions-iss-417
 :END:
 
-*** Notes
+,*** Notes
 Some implementation notes.
 
-*** user prompt
+,*** user prompt
 ...
 
-*** AI response
+,*** AI response
 ...
 #+end_src
 
@@ -106,7 +107,8 @@ It prompts for either:
 - an issue number
 - a full GitHub issue URL
 
-Then it stores =GH_ISSUE= and, if available, =GH_URL=. Existing branch,
+Then it stores =GH_REPO=, =GH_ISSUE=, and =GH_URL=. Bare issue numbers are
+expanded to full GitHub issue URLs from the task's repo context. Existing branch,
 workspace, and worktree properties are preserved.
 
 *** =M-x my/task-init-from-branch=
@@ -150,6 +152,14 @@ Show a lightweight report of active repo-plan tasks from =repo-plans/*.org=.
 The report lists the file, line, TODO state, title, issue/PR, branch, and
 =NEXT_ACTION= when present.
 
+*** Property and link helpers
+
+- =M-x my/task-describe-properties= shows direct, inherited, file-level, and derived values for managed task properties.
+- =M-x my/task-set-property= sets a managed task property with completion.
+- =M-x my/task-delete-property= deletes a direct managed task property.
+- =M-x my/task-insert-gh-link= inserts an explicit =gh:owner/repo#123= link using the current task's =GH_REPO= or resolved repo context.
+- =M-x my/task-add-worktree-to-gptel-allowed-roots= appends the task =WORKTREE= to the current gptel topic's =GPTEL_ALLOWED_ROOTS=.
+
 ** Naming rules
 
 If =GH_ISSUE= exists:
@@ -179,6 +189,7 @@ The workflow reads and writes these Org properties on the task heading:
 
 - =REPO_PATH=
 - =DEFAULT_BASE_BRANCH=
+- =GH_REPO=
 - =GH_ISSUE=
 - =GH_URL=
 - =PR=
@@ -268,6 +279,12 @@ If =GPTEL_ALLOWED_ROOTS= is present and =GPTEL_INHERIT_DEFAULT_ROOTS= is absent,
 the session uses the explicit roots only. Set =GPTEL_INHERIT_DEFAULT_ROOTS= to a
 truthy value to merge the explicit roots with the default/project roots.
 
+Helpful commands:
+
+- =M-x my/gptel-add-session-allowed-roots= appends roots without replacing the property.
+- =M-x my/gptel-add-attachment-dir-to-session-allowed-roots= adds the current heading's existing Org attachment directory; with prefix, it creates the directory first.
+- =M-x my/gptel-cleanup-response-headings= explicitly repairs and normalizes headings in a selected saved-chat region or the current subtree.
+
 * GitHub Links
 
 ** [[file:org-gh/org-gh.el][org-gh/org-gh.el]]
@@ -290,8 +307,7 @@ Tests for the task workflow:
 
 ** [[file:tests/my-gptel-org-workflow-tests.el][tests/my-gptel-org-workflow-tests.el]]
 
-Tests for Org heading normalization and Markdown-to-Org behavior in the gptel
-workflow.
+Tests for topic insertion, Org heading repair/normalization, session scope helpers, attachment roots, and Markdown-to-Org behavior in the gptel workflow.
 
 ** [[file:tests/my-gptel-tools-edit-tests.el][tests/my-gptel-tools-edit-tests.el]]
 

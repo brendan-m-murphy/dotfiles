@@ -23,6 +23,7 @@
 (declare-function my/gptel--assert-readable-path "my-gptel-tools" (path))
 (declare-function my/gptel--delete-dups-stable "my-gptel-tools" (items))
 (declare-function my/gptel--ignore-globs "my-gptel-tools" ())
+(declare-function my/gptel--normalize-root-entry "my-gptel-tools" (path))
 (declare-function my/gptel--project-root "my-gptel-tools" ())
 (declare-function my/gptel--session-scope "my-gptel-tools" ())
 (declare-function my/gptel--split-property-entries "my-gptel-tools" (value))
@@ -348,19 +349,67 @@ With a prefix argument, prompt for a file."
                    (buffer-name buffer))
                  (buffer-list)))))
 
+(defun my/gptel--read-root-list (prompt)
+  "Read one or more directories using PROMPT."
+  (let (roots done)
+    (while (not done)
+      (push (read-directory-name prompt nil nil t) roots)
+      (setq done (not (y-or-n-p "Add another root? "))))
+    (nreverse roots)))
+
+(defun my/gptel--normalize-session-roots (roots)
+  "Normalize ROOTS for storage in `GPTEL_ALLOWED_ROOTS'."
+  (mapcar #'my/gptel--normalize-root-entry
+          (if (listp roots) roots (list roots))))
+
 (defun my/gptel-set-session-allowed-roots (roots)
   "Set `GPTEL_ALLOWED_ROOTS' on the current gptel topic to ROOTS."
-  (interactive
-   (list
-    (let (roots done)
-      (while (not done)
-        (push (read-directory-name "Allowed root: " nil nil t) roots)
-        (setq done (not (y-or-n-p "Add another root? "))))
-      (nreverse roots))))
+  (interactive (list (my/gptel--read-root-list "Allowed root: ")))
   (my/gptel--set-topic-property-value
    "GPTEL_ALLOWED_ROOTS"
-   (my/gptel--format-session-property-entries roots))
+   (my/gptel--format-session-property-entries
+    (my/gptel--normalize-session-roots roots)))
   (my/gptel-describe-session-scope))
+
+(defun my/gptel-add-session-allowed-roots (roots)
+  "Append ROOTS to `GPTEL_ALLOWED_ROOTS' on the current gptel topic."
+  (interactive (list (my/gptel--read-root-list "Add allowed root: ")))
+  (let ((entries (my/gptel--normalize-session-roots
+                  (append (my/gptel--session-property-entries "GPTEL_ALLOWED_ROOTS")
+                          roots))))
+    (my/gptel--set-topic-property-value
+     "GPTEL_ALLOWED_ROOTS"
+     (my/gptel--format-session-property-entries entries)))
+  (my/gptel-describe-session-scope))
+
+(defun my/gptel--attachment-dir (&optional create)
+  "Return the current Org attachment directory.
+When CREATE is non-nil, create the attachment directory if needed.  Without
+CREATE, only an existing attachment directory is accepted."
+  (unless (derived-mode-p 'org-mode)
+    (user-error "Attachment roots require Org mode"))
+  (require 'org-attach)
+  (save-excursion
+    (unless (org-before-first-heading-p)
+      (org-back-to-heading t))
+    (let ((dir (org-attach-dir create nil)))
+      (unless dir
+        (user-error "No Org attachment directory for this heading"))
+      (cond
+       ((file-directory-p dir)
+        (file-name-as-directory (file-truename dir)))
+       (create
+        (make-directory dir t)
+        (file-name-as-directory (file-truename dir)))
+       (t
+        (user-error "Attachment directory does not exist; use a prefix arg to create it: %s" dir))))))
+
+(defun my/gptel-add-attachment-dir-to-session-allowed-roots (&optional create)
+  "Append the current heading's Org attachment dir to `GPTEL_ALLOWED_ROOTS'.
+With prefix argument CREATE, create the attachment directory if needed."
+  (interactive "P")
+  (my/gptel-add-session-allowed-roots
+   (list (my/gptel--attachment-dir create))))
 
 (defun my/gptel-toggle-session-inherit-default-roots ()
   "Toggle `GPTEL_INHERIT_DEFAULT_ROOTS' on the current gptel topic."
@@ -469,23 +518,40 @@ Returns non-nil if found."
             (when (= (org-current-level) 2) t))
         (error nil)))))
 
+(defun my/gptel--goto-current-section ()
+  "Move point to the current level-1 section heading, if any.
+Returns non-nil if found."
+  (when (derived-mode-p 'org-mode)
+    (save-restriction
+      (widen)
+      (condition-case nil
+          (progn
+            (unless (org-before-first-heading-p)
+              (org-back-to-heading t))
+            (while (> (org-current-level) 1)
+              (org-up-heading-safe))
+            (when (= (org-current-level) 1) t))
+        (error nil)))))
+
 (defun my/gptel-new-topic (title)
   "Create a new level-2 Topic heading named TITLE.
 
 Works from anywhere in the file:
 - If inside a level-2 topic subtree, inserts after that topic.
-- Otherwise inserts at end of buffer (respecting narrowing if active)."
+- Otherwise, if inside a level-1 section, inserts at the end of that section.
+- If there is no current level-1 section, inserts at end of buffer."
   (interactive "sTopic title: ")
   (unless (derived-mode-p 'org-mode)
     (user-error "Not in Org mode"))
 
-  (let ((in-topic (my/gptel--goto-current-topic)))
-    (cond
-     (in-topic
-      (org-end-of-subtree t t))
-     (t
-      ;; If narrowed, insert at end of visible region.
-      (goto-char (point-max)))))
+  (cond
+   ((my/gptel--goto-current-topic)
+    (org-end-of-subtree t t))
+   ((my/gptel--goto-current-section)
+    (org-end-of-subtree t t))
+   (t
+    ;; If narrowed, insert at end of visible region.
+    (goto-char (point-max))))
 
   (unless (bolp) (insert "\n"))
   (insert (format "\n** %s\n" title))
@@ -503,9 +569,11 @@ Works from anywhere in the file:
   "Insert a new *** conversation entry under the current level-2 Topic.
 
 Does not send. After writing your prompt under @user:, use `gptel-send'
-as usual."
+as usual.  The command works from anywhere inside the topic subtree, including
+previous prompt or response headings."
   (interactive)
-  (my/gptel--assert-topic)
+  (unless (my/gptel--goto-current-topic)
+    (user-error "Not inside a gptel topic subtree"))
 
   ;; Move to end of topic subtree
   (org-end-of-subtree t t)
@@ -543,18 +611,103 @@ as usual."
         (org-end-of-subtree t t)
         (insert "\n*** Conversation\n"))))))
 
+(defun my/gptel--org-block-boundary (line)
+  "Return block boundary type for LINE, or nil.
+The return value is `begin' or `end'."
+  (let ((case-fold-search t))
+    (cond
+     ((string-match-p "^[ 	]*#\\+begin_" line) 'begin)
+     ((string-match-p "^[ 	]*#\\+end_" line) 'end)
+     (t nil))))
+
+(defun my/gptel--each-content-line (beg end fn)
+  "Call FN for each line between BEG and END.
+FN receives LINE-BEG, LINE-END, and ACTIVE-P.  ACTIVE-P is nil inside Org
+source/example/export blocks."
+  (save-excursion
+    (let ((limit (copy-marker end))
+          (in-block nil))
+      (goto-char beg)
+      (while (< (point) limit)
+        (let* ((line-beg (point))
+               (line-end (line-end-position))
+               (line (buffer-substring-no-properties line-beg line-end))
+               (boundary (my/gptel--org-block-boundary line)))
+          (cond
+           ((eq boundary 'begin)
+            (funcall fn line-beg line-end nil)
+            (setq in-block t))
+           ((eq boundary 'end)
+            (funcall fn line-beg line-end nil)
+            (setq in-block nil))
+           (t
+            (funcall fn line-beg line-end (not in-block))))
+          (forward-line 1)))
+      (set-marker limit nil))))
+
+(defun my/gptel--repair-malformed-response-headings (beg end)
+  "Repair malformed assistant heading lines between BEG and END.
+This handles lines like `**/ Heading', which can result from Markdown emphasis
+conversion around model-written pseudo-headings."
+  (my/gptel--each-content-line
+   beg end
+   (lambda (line-beg _line-end active-p)
+     (when active-p
+       (save-excursion
+         (goto-char line-beg)
+         (when (looking-at "^\\(\\*+\\)/[ 	]*\\(.+\\)$")
+           (replace-match "\\1 \\2" t nil)))))))
+
+(defun my/gptel--shallowest-response-heading (beg end)
+  "Return the shallowest Org heading depth between BEG and END."
+  (let (min-depth)
+    (my/gptel--each-content-line
+     beg end
+     (lambda (line-beg _line-end active-p)
+       (when active-p
+         (save-excursion
+           (goto-char line-beg)
+           (when (looking-at "^\\(\\*+\\)[ 	]")
+             (let ((depth (length (match-string 1))))
+               (setq min-depth (if min-depth (min min-depth depth) depth))))))))
+    min-depth))
+
+(defun my/gptel--shift-response-headings (beg end delta)
+  "Shift Org headings between BEG and END by DELTA stars."
+  (when (> delta 0)
+    (my/gptel--each-content-line
+     beg end
+     (lambda (line-beg _line-end active-p)
+       (when active-p
+         (save-excursion
+           (goto-char line-beg)
+           (when (looking-at "^\\(\\*+\\)\\([ 	]\\)")
+             (replace-match
+              (concat (match-string 1) (make-string delta ?*) (match-string 2))
+              t t))))))))
+
+(defun my/gptel--cleanup-assistant-content (beg end)
+  "Repair and normalize assistant content between BEG and END."
+  (let ((end-marker (copy-marker end)))
+    (unwind-protect
+        (progn
+          (my/gptel--repair-malformed-response-headings beg end-marker)
+          (when-let ((min-depth (my/gptel--shallowest-response-heading beg end-marker)))
+            (my/gptel--shift-response-headings beg end-marker (max 0 (- 4 min-depth)))))
+      (set-marker end-marker nil))))
+
 (defun my/gptel-normalize-response-headings (beg end)
   "Normalize Org headings in the assistant response between BEG and END.
 
 Narrow to the inserted response region from BEG to END, locate the
-`@assistant' marker to find where assistant content begins, then scan
-headings under that point.
+`@assistant' marker to find where assistant content begins, then repair malformed
+heading lines and scan headings under that point.
 
-The shallowest heading found is promoted so that its level becomes 4
-(`\"****\"'), and all other headings are shifted by the same number of
-stars, preserving their relative depth. Headings that are already at
-level 4 or deeper are never demoted; if the minimum level is >= 4, the
-buffer is left unchanged."
+The shallowest heading found is promoted to level 4 (four stars),
+and all other headings are shifted by the same number of stars,
+preserving their relative depth.  Headings that are already at level 4 or deeper
+are never demoted; if the minimum level is >= 4, the buffer is left unchanged.
+Org source/example/export blocks inside the response are ignored."
   (when (and (derived-mode-p 'org-mode)
              (integer-or-marker-p beg)
              (integer-or-marker-p end)
@@ -563,32 +716,47 @@ buffer is left unchanged."
       (save-restriction
         (narrow-to-region beg end)
         (goto-char (point-min))
-
-        ;; locate assistant marker
-        (when (re-search-forward "^@assistant\\(?::\\)?[ \t]*$" nil t)
+        (when (re-search-forward "^@assistant\\(?::\\)?[ 	]*$" nil t)
           (forward-line 1)
+          (my/gptel--cleanup-assistant-content (point) (point-max)))))))
 
-          ;; pass 1: find shallowest heading
-          (let ((content-start (point))
-                min-depth)
-            (save-excursion
-              (goto-char content-start)
-              (while (re-search-forward "^\\(\\*+\\)[ \t]" nil t)
-                (let ((depth (length (match-string 1))))
-                  (setq min-depth (if min-depth
-                                      (min min-depth depth)
-                                    depth)))))
+(defun my/gptel--cleanup-response-region (beg end)
+  "Cleanup assistant responses between BEG and END.
+Return the number of assistant markers processed."
+  (let ((count 0))
+    (save-excursion
+      (save-restriction
+        (narrow-to-region beg end)
+        (goto-char (point-min))
+        (while (re-search-forward "^@assistant\\(?::\\)?[ 	]*$" nil t)
+          (let ((content-start (progn (forward-line 1) (point)))
+                (content-end (save-excursion
+                               (or (and (re-search-forward
+                                         "^\\(\\*\\*\\* .*\\(?:Question\\|Prompt\\|Response\\|Conversation\\)\\|@user\\(?::\\)?[ 	]*$\\)"
+                                         nil t)
+                                        (line-beginning-position))
+                                   (point-max)))))
+            (my/gptel--cleanup-assistant-content content-start content-end)
+            (setq count (1+ count))
+            (goto-char content-end)))))
+    count))
 
-            ;; pass 2: apply normalization
-            (when min-depth
-              (let ((delta (max 0 (- 4 min-depth))))
-                (when (> delta 0)
-                  (goto-char content-start)
-                  (while (re-search-forward "^\\(\\*+\\)\\([ \t]\\)" nil t)
-                    (replace-match
-                     (concat (match-string 1) (make-string delta ?*) (match-string 2))
-                     t t)))))))))))
+(defun my/gptel-cleanup-response-headings (beg end)
+  "Explicitly repair and normalize saved gptel Org response headings.
 
+When the region is active, clean only the selected region.  Otherwise clean the
+current Org subtree.  This command is intentionally explicit; response cleanup is
+not applied to a whole Org file automatically."
+  (interactive
+   (if (use-region-p)
+       (list (region-beginning) (region-end))
+     (unless (derived-mode-p 'org-mode)
+       (user-error "Response cleanup requires Org mode or an active region"))
+     (save-excursion
+       (org-back-to-heading t)
+       (list (point) (save-excursion (org-end-of-subtree t t) (point))))))
+  (let ((count (my/gptel--cleanup-response-region beg end)))
+    (message "Cleaned %d assistant response%s" count (if (= count 1) "" "s"))))
 
 ;;; ------------------------------------------------------------------
 ;;; Activation

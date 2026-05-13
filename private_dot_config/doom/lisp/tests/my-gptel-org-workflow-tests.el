@@ -526,5 +526,119 @@ This is intended for use in the markdown to org stream converter."
         (when (get-buffer "*gptel-session-scope*")
           (kill-buffer "*gptel-session-scope*"))))))
 
+(ert-deftest my/gptel-new-topic-from-nested-heading-stays-in-current-section ()
+  (my/gptel-test--with-org-buffer
+      "* First\n** Topic\n*** Entry\n**** Child\nText\n* Second\n** Existing\n"
+    (re-search-forward "^\\*\\*\\*\\* Child" nil t)
+    (my/gptel-new-topic "Branch")
+    (let ((branch-pos (save-excursion
+                        (goto-char (point-min))
+                        (re-search-forward "^\\*\\* Branch$" nil t)))
+          (second-pos (save-excursion
+                        (goto-char (point-min))
+                        (re-search-forward "^\\* Second$" nil t))))
+      (should branch-pos)
+      (should second-pos)
+      (should (< branch-pos second-pos)))))
+
+(ert-deftest my/gptel-new-topic-from-top-level-inserts-before-next-section ()
+  (my/gptel-test--with-org-buffer
+      "* First\nIntro\n* Second\n"
+    (re-search-forward "^\\* First" nil t)
+    (beginning-of-line)
+    (my/gptel-new-topic "Topic")
+    (let ((topic-pos (save-excursion
+                       (goto-char (point-min))
+                       (re-search-forward "^\\*\\* Topic$" nil t)))
+          (second-pos (save-excursion
+                        (goto-char (point-min))
+                        (re-search-forward "^\\* Second$" nil t))))
+      (should topic-pos)
+      (should second-pos)
+      (should (< topic-pos second-pos)))))
+
+(ert-deftest my/gptel-new-entry-from-nested-heading-appends-to-containing-topic ()
+  (my/gptel-test--with-org-buffer
+      "* Repo\n** Topic\n*** Old\n@assistant\n**** Deep\nText\n** Other\n"
+    (re-search-forward "^\\*\\*\\*\\* Deep" nil t)
+    (my/gptel-new-entry)
+    (let ((entry-pos (save-excursion
+                       (goto-char (point-min))
+                       (re-search-forward "^\\*\\*\\* .* — Question$" nil t)))
+          (other-pos (save-excursion
+                       (goto-char (point-min))
+                       (re-search-forward "^\\*\\* Other$" nil t))))
+      (should entry-pos)
+      (should other-pos)
+      (should (< entry-pos other-pos)))))
+
+(ert-deftest my/gptel-normalize-response-headings-repairs-star-slash-heading ()
+  (my/gptel-test--with-org-buffer
+      "*** Response\n@assistant\n**/ Heading\n"
+    (my/gptel-normalize-response-headings (point-min) (point-max))
+    (should (equal (buffer-string)
+                   "*** Response\n@assistant\n**** Heading\n"))))
+
+(ert-deftest my/gptel-normalize-response-headings-ignores-source-blocks ()
+  (my/gptel-test--with-org-buffer
+      "*** Response\n@assistant\n#+begin_src org\n**/ Not a heading\n* Raw\n#+end_src\n**/ Real heading\n"
+    (my/gptel-normalize-response-headings (point-min) (point-max))
+    (should (string-match-p "^\\*\\*/ Not a heading$" (buffer-string)))
+    (should (string-match-p "^\\* Raw$" (buffer-string)))
+    (should (string-match-p "^\\*\\*\\*\\* Real heading$" (buffer-string)))))
+
+(ert-deftest my/gptel-cleanup-response-headings-region-is-scoped ()
+  (my/gptel-test--with-org-buffer
+      "*** Response\n@assistant\n**/ First\n\n*** Response\n@assistant\n**/ Second\n"
+    (let ((second-beg (save-excursion
+                        (goto-char (point-min))
+                        (re-search-forward "^\\*\\*\\* Response$" nil t 2)
+                        (line-beginning-position))))
+      (my/gptel-cleanup-response-headings second-beg (point-max))
+      (should (string-match-p "^\\*\\*/ First$" (buffer-string)))
+      (should (string-match-p "^\\*\\*\\*\\* Second$" (buffer-string))))))
+
+(ert-deftest my/gptel-add-session-allowed-roots-appends-deduplicates-and-preserves-order ()
+  (my/gptel-test--with-temp-dir root-a
+    (my/gptel-test--with-temp-dir root-b
+      (my/gptel-test--with-org-buffer
+          (format "* Outside\n** Topic\n:PROPERTIES:\n:GPTEL_TOPIC: demo\n:GPTEL_ALLOWED_ROOTS: %s\n:END:\n"
+                  root-a)
+        (my/gptel-test--topic-point)
+        (my/gptel-add-session-allowed-roots (list root-b root-a))
+        (should (equal (org-entry-get nil "GPTEL_ALLOWED_ROOTS")
+                       (string-join (mapcar #'my/gptel-test--dir (list root-a root-b))
+                                    " ")))))))
+
+(ert-deftest my/gptel-add-attachment-dir-to-session-allowed-roots-uses-existing-dir ()
+  (my/gptel-test--with-temp-dir attach-dir
+    (my/gptel-test--with-org-buffer
+        "* Outside\n** Topic\n:PROPERTIES:\n:GPTEL_TOPIC: demo\n:END:\n"
+      (my/gptel-test--topic-point)
+      (require 'org-attach)
+      (cl-letf (((symbol-function 'org-attach-dir)
+                 (lambda (&optional create _no-fs-check)
+                   (should-not create)
+                   attach-dir)))
+        (my/gptel-add-attachment-dir-to-session-allowed-roots)
+        (should (equal (org-entry-get nil "GPTEL_ALLOWED_ROOTS")
+                       (my/gptel-test--dir attach-dir)))))))
+
+(ert-deftest my/gptel-add-attachment-dir-to-session-allowed-roots-prefix-creates-dir ()
+  (my/gptel-test--with-temp-dir parent
+    (let ((attach-dir (expand-file-name "attach" parent)))
+      (my/gptel-test--with-org-buffer
+          "* Outside\n** Topic\n:PROPERTIES:\n:GPTEL_TOPIC: demo\n:END:\n"
+        (my/gptel-test--topic-point)
+        (require 'org-attach)
+        (cl-letf (((symbol-function 'org-attach-dir)
+                   (lambda (&optional create _no-fs-check)
+                     (should create)
+                     attach-dir)))
+          (my/gptel-add-attachment-dir-to-session-allowed-roots t)
+          (should (file-directory-p attach-dir))
+          (should (equal (org-entry-get nil "GPTEL_ALLOWED_ROOTS")
+                         (my/gptel-test--dir attach-dir))))))))
+
 (provide 'my-gptel-org-workflow-tests)
 ;;; my-gptel-org-workflow-tests.el ends here

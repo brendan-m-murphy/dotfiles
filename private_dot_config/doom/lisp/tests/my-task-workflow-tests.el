@@ -302,6 +302,143 @@
                        "/tmp/openghg_inversions-wt/openghg_inversions-iss-417"
                        "issue-417-basis-operator-phase-1"))))))
 
+(ert-deftest my/task-normalize-issue-reference-number-uses-gh-repo ()
+  (let ((parsed (my/task--normalize-issue-reference "417" "org/repo")))
+    (should (equal (plist-get parsed :gh_repo) "org/repo"))
+    (should (equal (plist-get parsed :gh_issue) "417"))
+    (should (equal (plist-get parsed :gh_url)
+                   "https://github.com/org/repo/issues/417")))
+  (should-error (my/task--normalize-issue-reference "417") :type 'user-error))
+
+(ert-deftest my/task-normalize-issue-reference-url-captures-repo ()
+  (let ((parsed (my/task--normalize-issue-reference
+                 "https://github.com/org/repo/issues/417")))
+    (should (equal (plist-get parsed :gh_repo) "org/repo"))
+    (should (equal (plist-get parsed :gh_issue) "417"))
+    (should (equal (plist-get parsed :gh_url)
+                   "https://github.com/org/repo/issues/417"))))
+
+(ert-deftest my/task-resolve-gh-repo-prefers-property-then-url ()
+  (my/task-test--with-org-buffer
+      (concat (my/task-test--heading 1 "Repo")
+              (my/task-test--heading my/task-heading-level "Task")
+              ":PROPERTIES:\n:GH_REPO: direct/repo\n:GH_URL: https://github.com/url/repo/issues/9\n:END:\n")
+    (goto-char (point-max))
+    (my/task--goto-task-root)
+    (should (equal (my/task--resolve-gh-repo nil) "direct/repo")))
+  (my/task-test--with-org-buffer
+      (concat (my/task-test--heading 1 "Repo")
+              (my/task-test--heading my/task-heading-level "Task")
+              ":PROPERTIES:\n:GH_URL: https://github.com/url/repo/issues/9\n:END:\n")
+    (goto-char (point-max))
+    (my/task--goto-task-root)
+    (cl-letf (((symbol-function 'my/task--gh-repo-from-gh) (lambda (_repo) nil))
+              ((symbol-function 'my/task--gh-repo-from-remote) (lambda (_repo) nil)))
+      (should (equal (my/task--resolve-gh-repo nil) "url/repo")))))
+
+(ert-deftest my/task-resolve-gh-repo-falls-back-to-gh-then-remote ()
+  (my/task-test--with-org-buffer
+      (concat (my/task-test--heading 1 "Repo")
+              (my/task-test--heading my/task-heading-level "Task"))
+    (goto-char (point-max))
+    (my/task--goto-task-root)
+    (cl-letf (((symbol-function 'my/task--gh-repo-from-gh)
+               (lambda (_repo) "gh/repo"))
+              ((symbol-function 'my/task--gh-repo-from-remote)
+               (lambda (_repo) "remote/repo")))
+      (should (equal (my/task--resolve-gh-repo "/tmp/repo/") "gh/repo")))
+    (cl-letf (((symbol-function 'my/task--gh-repo-from-gh)
+               (lambda (_repo) nil))
+              ((symbol-function 'my/task--gh-repo-from-remote)
+               (lambda (_repo) "remote/repo")))
+      (should (equal (my/task--resolve-gh-repo "/tmp/repo/") "remote/repo")))))
+
+(ert-deftest my/task-link-issue-number-writes-repo-issue-and-url ()
+  (my/task-test--with-temp-dir repo
+    (let ((repo-path (file-name-as-directory repo)))
+      (my/task-test--with-org-buffer
+          (concat "#+PROPERTY: REPO_PATH " repo-path "\n"
+                  (my/task-test--heading 1 "Repo")
+                  (my/task-test--heading my/task-heading-level "Basis operator phase 1")
+                  ":PROPERTIES:\n:GH_REPO: org/repo\n:WORKSPACE: local-ws\n:BRANCH: local-branch\n:WORKTREE: /tmp/local-ws\n:END:\n")
+        (goto-char (point-max))
+        (cl-letf (((symbol-function 'my/task--git-root)
+                   (lambda (_path) repo-path)))
+          (my/task-link-issue "417")
+          (my/task--goto-task-root)
+          (should (equal (my/task--get-property "GH_REPO" nil) "org/repo"))
+          (should (equal (my/task--get-property "GH_ISSUE" nil) "417"))
+          (should (equal (my/task--get-property "GH_URL" nil)
+                         "https://github.com/org/repo/issues/417"))
+          (should (equal (my/task--get-property "WORKSPACE" nil) "local-ws")))))))
+
+(ert-deftest my/task-property-set-delete-operates-on-task-root ()
+  (my/task-test--with-org-buffer
+      (concat (my/task-test--heading 1 "Repo")
+              (my/task-test--heading my/task-heading-level "Task")
+              (my/task-test--heading (1+ my/task-heading-level) "Notes")
+              "Body\n")
+    (goto-char (point-max))
+    (my/task-set-property "NEXT_ACTION" "run tests")
+    (my/task--goto-task-root)
+    (should (equal (my/task--get-property "NEXT_ACTION" nil) "run tests"))
+    (goto-char (point-max))
+    (my/task-delete-property "NEXT_ACTION")
+    (my/task--goto-task-root)
+    (should-not (my/task--get-property "NEXT_ACTION" nil))))
+
+(ert-deftest my/task-property-snapshot-includes-derived-values ()
+  (my/task-test--with-temp-dir repo
+    (let ((repo-path (file-name-as-directory repo)))
+      (my/task-test--with-org-buffer
+          (concat "#+PROPERTY: REPO_PATH " repo-path "\n"
+                  (my/task-test--heading 1 "Repo")
+                  (my/task-test--heading my/task-heading-level "Basis operator phase 1")
+                  ":PROPERTIES:\n:GH_ISSUE: 417\n:END:\n")
+        (goto-char (point-max))
+        (cl-letf (((symbol-function 'my/task--git-root)
+                   (lambda (_path) repo-path))
+                  ((symbol-function 'my/task--resolve-gh-repo)
+                   (lambda (&optional _repo) "org/repo")))
+          (let* ((rows (my/task--property-snapshot))
+                 (gh-url (cl-find "GH_URL" rows
+                                  :key (lambda (row) (plist-get row :property))
+                                  :test #'equal))
+                 (worktree (cl-find "WORKTREE" rows
+                                    :key (lambda (row) (plist-get row :property))
+                                    :test #'equal)))
+            (should (equal (plist-get gh-url :derived)
+                           "https://github.com/org/repo/issues/417"))
+            (should (string-match-p "iss-417"
+                                    (plist-get worktree :derived)))))))))
+
+(ert-deftest my/task-insert-gh-link-inserts-at-original-point ()
+  (my/task-test--with-temp-dir repo
+    (let ((repo-path (file-name-as-directory repo)))
+      (my/task-test--with-org-buffer
+          (concat "#+PROPERTY: REPO_PATH " repo-path "\n"
+                  (my/task-test--heading 1 "Repo")
+                  (my/task-test--heading my/task-heading-level "Task")
+                  ":PROPERTIES:\n:GH_REPO: org/repo\n:END:\n\nInsert here: ")
+        (goto-char (point-max))
+        (cl-letf (((symbol-function 'my/task--git-root)
+                   (lambda (_path) repo-path)))
+          (my/task-insert-gh-link "123")
+          (should (string-suffix-p "Insert here: [[gh:org/repo#123]]"
+                                   (string-trim-right (buffer-string)))))))))
+
+(ert-deftest my/task-add-worktree-to-gptel-allowed-roots-uses-task-worktree ()
+  (let (captured)
+    (my/task-test--with-org-buffer
+        (concat (my/task-test--heading 1 "Repo")
+                (my/task-test--heading my/task-heading-level "Task")
+                ":PROPERTIES:\n:WORKTREE: /tmp/repo-wt/task\n:END:\n")
+      (goto-char (point-max))
+      (cl-letf (((symbol-function 'my/gptel-add-session-allowed-roots)
+                 (lambda (roots) (setq captured roots))))
+        (my/task-add-worktree-to-gptel-allowed-roots)
+        (should (equal captured '("/tmp/repo-wt/task")))))))
+
 (provide 'my-task-workflow-tests)
 
 ;;; my-task-workflow-tests.el ends here
