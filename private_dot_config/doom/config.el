@@ -35,6 +35,17 @@
 ;;(setq doom-theme 'doom-one)
 (setq doom-theme 'doom-solarized-light)
 
+(setq doom-font
+      (font-spec :family "Monaspace Neon"
+                 :size 14
+                 :weight 'regular)
+      doom-variable-pitch-font
+      (font-spec :family "Monaspace Neon"
+                 :size 14)
+      doom-big-font
+      (font-spec :family "Monaspace Neon"
+                 :size 22))
+
 ;; This determines the style of line numbers in effect. If set to `nil', line
 ;; numbers are disabled. For relative line numbers, set this to `relative'.
 (setq display-line-numbers-type t)
