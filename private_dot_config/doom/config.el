@@ -37,11 +37,11 @@
 
 (setq doom-font
       (font-spec :family "Monaspace Neon"
-                 :size 14
+                 :size 15
                  :weight 'regular)
       doom-variable-pitch-font
       (font-spec :family "Monaspace Neon"
-                 :size 14)
+                 :size 15)
       doom-big-font
       (font-spec :family "Monaspace Neon"
                  :size 22))

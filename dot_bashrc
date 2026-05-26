@@ -10,3 +10,5 @@ if [ -d "$HOME/.bash.d" ]; then
     [ -r "$file" ] && source "$file"
   done
 fi
+
+export PATH="/Users/bm13805/.pixi/bin:$PATH"
