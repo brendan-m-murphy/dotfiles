@@ -867,12 +867,39 @@
        (when ref (string-remove-prefix "origin/" ref)))
      "main"))
 
-  (defun my/open-in-codex (&optional dir)
-    "Open DIR (or current directory) in the Codex macOS app."
-    (interactive)
-    (let ((path (or dir default-directory)))
+  (defun my/git-primary-worktree-path (&optional dir)
+    "Return the primary git worktree for DIR, or DIR when unavailable."
+    (let* ((path (file-name-as-directory
+                  (expand-file-name (or dir default-directory))))
+           (default-directory path))
+      (with-temp-buffer
+        (if (and (zerop (process-file "git" nil nil nil
+                                      "rev-parse" "--git-dir"))
+                 (zerop (process-file "git" nil (current-buffer) nil
+                                      "worktree" "list" "--porcelain")))
+            (progn
+              (goto-char (point-min))
+              (if (re-search-forward "^worktree \\(.+\\)$" nil t)
+                  (file-name-as-directory
+                   (expand-file-name (match-string-no-properties 1)))
+                path))
+          path))))
+
+  (defun my/open-in-codex (&optional dir exact)
+    "Open DIR in the Codex macOS app.
+By default, open the primary git worktree so linked worktrees stay under the
+same Codex project. With prefix arg EXACT, open DIR exactly."
+    (interactive (list nil current-prefix-arg))
+    (let ((path (if exact
+                    (or dir default-directory)
+                  (my/git-primary-worktree-path (or dir default-directory)))))
       (start-process "open-codex" nil "open" "-a" "Codex" path)
       (message "Opening Codex in %s" path)))
+
+  (defun my/open-exact-in-codex (&optional dir)
+    "Open DIR exactly in the Codex macOS app."
+    (interactive)
+    (my/open-in-codex (or dir default-directory) t))
 
   (defun my/uv-sync-here (&optional dir)
     "Run `uv sync` in DIR (or current directory)."
@@ -1049,6 +1076,7 @@
        :desc "Create worktree + Codex" "c" #'my/magit-new-worktree-and-codex
        :desc "Run uv sync" "v" #'my/uv-sync-here
        :desc "Open in Codex" "o" #'my/open-in-codex
+       :desc "Open exact dir in Codex" "O" #'my/open-exact-in-codex
        :desc "Cleanup merged worktree" "x" #'my/magit-cleanup-worktree
        :desc "Resolve merge (smerge)" "m" #'my/smerge-start))
 

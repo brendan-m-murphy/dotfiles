@@ -54,6 +54,20 @@ A task or file can override this with DEFAULT_BASE_BRANCH."
     "LAST_REVIEWED")
   "Task properties managed by the task workflow.")
 
+(defconst my/task-metadata-properties
+  '("REPO_PATH"
+    "GH_REPO"
+    "GH_ISSUE"
+    "GH_URL"
+    "BRANCH"
+    "GPTEL_TOPIC"
+    "CREATED")
+  "Task properties written by metadata-only commands.")
+
+(defun my/task--property-key (property)
+  "Return the plist key corresponding to Org PROPERTY."
+  (intern (concat ":" (downcase property))))
+
 (defun my/task--task-heading-level-p (&optional level)
   "Return non-nil when LEVEL is the configured task heading level."
   (= (or level (org-current-level) 0) my/task-heading-level))
@@ -133,7 +147,18 @@ When INHERIT is non-nil, allow Org property inheritance."
 (defun my/task--write-properties (plist)
   "Write managed task properties from PLIST onto the current task heading."
   (dolist (property my/task-properties)
-    (my/task--set-property property (plist-get plist (intern (concat ":" (downcase property)))))))
+    (my/task--set-property property (plist-get plist (my/task--property-key property)))))
+
+(defun my/task--write-selected-properties (plist properties)
+  "Write PROPERTIES from PLIST onto the current task heading."
+  (dolist (property properties)
+    (my/task--set-property property (plist-get plist (my/task--property-key property)))))
+
+(defun my/task--write-metadata-properties (metadata)
+  "Write metadata-only task properties from METADATA.
+This intentionally avoids materializing `WORKTREE' and `WORKSPACE'."
+  (my/task--write-selected-properties metadata my/task-metadata-properties))
+
 
 (defun my/task--call-process-string (program &rest args)
   "Run PROGRAM with ARGS and return trimmed stdout.
@@ -353,6 +378,122 @@ GH-REPO so the task can store an unambiguous `GH_URL'."
   "Derive a worktree path from REPO-PATH and WORKSPACE."
   (expand-file-name workspace (my/task--worktree-root repo-path)))
 
+(defun my/task--short-branch-name (ref)
+  "Return a display branch name for git REF."
+  (if (string-prefix-p "refs/heads/" ref)
+      (substring ref (length "refs/heads/"))
+    ref))
+
+(defun my/task--same-path-p (a b)
+  "Return non-nil if local paths A and B name the same expanded path."
+  (string-equal (directory-file-name (expand-file-name a))
+                (directory-file-name (expand-file-name b))))
+
+(defun my/task--parse-worktree-list (output)
+  "Parse git worktree list porcelain OUTPUT into plist entries."
+  (let ((entries nil)
+        (current nil))
+    (cl-labels
+        ((finish
+          ()
+          (when (and current (plist-get current :path))
+            (push current entries))
+          (setq current nil)))
+      (dolist (line (split-string output "\n"))
+        (cond
+         ((string-empty-p line)
+          (finish))
+         ((string-match "\\`worktree \\(.+\\)\\'" line)
+          (finish)
+          (setq current (list :path (match-string 1 line))))
+         ((and current (string-match "\\`HEAD \\(.+\\)\\'" line))
+          (setq current (plist-put current :head (match-string 1 line))))
+         ((and current (string-match "\\`branch \\(.+\\)\\'" line))
+          (setq current
+                (plist-put current :branch
+                           (my/task--short-branch-name (match-string 1 line)))))
+         ((and current (string-match-p "\\`detached\\'" line))
+          (setq current (plist-put current :detached t)))
+         ((and current (string-match-p "\\`bare\\'" line))
+          (setq current (plist-put current :bare t)))))
+      (finish))
+    (nreverse entries)))
+
+(defun my/task--worktrees (repo-path)
+  "Return registered git worktrees for REPO-PATH."
+  (let ((default-directory repo-path))
+    (my/task--parse-worktree-list
+     (my/task--call-process-string "git" "worktree" "list" "--porcelain"))))
+
+(defun my/task--primary-worktree-path (repo-path)
+  "Return the primary worktree path for REPO-PATH.
+Git reports the main worktree first in `git worktree list --porcelain'."
+  (if-let ((entry (car (my/task--worktrees repo-path))))
+      (file-name-as-directory (expand-file-name (plist-get entry :path)))
+    repo-path))
+
+(defun my/task--worktree-display-name (entry)
+  "Return a completion display string for worktree ENTRY."
+  (format "%s  %s"
+          (or (plist-get entry :branch)
+              (and (plist-get entry :detached) "detached")
+              "unknown")
+          (plist-get entry :path)))
+
+(defun my/task--worktree-entry-for-path (repo-path worktree)
+  "Return the registered worktree entry for WORKTREE in REPO-PATH."
+  (or (cl-find-if
+       (lambda (entry)
+         (my/task--same-path-p (plist-get entry :path) worktree))
+       (my/task--worktrees repo-path))
+      (user-error "Worktree is not registered for %s: %s" repo-path worktree)))
+
+(defun my/task--prompt-worktree (repo-path &optional default-path)
+  "Prompt for a registered worktree in REPO-PATH.
+DEFAULT-PATH, when non-nil, is used as the completion default."
+  (let* ((entries (my/task--worktrees repo-path))
+         (choices (mapcar (lambda (entry)
+                            (cons (my/task--worktree-display-name entry) entry))
+                          entries))
+         (default (when default-path
+                    (when-let ((entry (cl-find-if
+                                       (lambda (candidate)
+                                         (my/task--same-path-p
+                                          (plist-get candidate :path)
+                                          default-path))
+                                       entries)))
+                      (my/task--worktree-display-name entry))))
+         (selected (completing-read "Adopt worktree: "
+                                    (mapcar #'car choices)
+                                    nil t nil nil default)))
+    (cdr (assoc selected choices))))
+
+(defun my/task--apply-worktree-entry (metadata entry)
+  "Return METADATA updated to use registered worktree ENTRY."
+  (let ((worktree (plist-get entry :path))
+        (branch (plist-get entry :branch)))
+    (setq metadata (plist-put metadata :worktree worktree))
+    (setq metadata (plist-put metadata :worktree_explicit worktree))
+    (when branch
+      (setq metadata (plist-put metadata :branch branch))
+      (setq metadata (plist-put metadata :branch_explicit branch)))
+    metadata))
+
+(defun my/task--maybe-adopt-branch-worktree (metadata)
+  "Adopt an existing worktree from METADATA's branch when unambiguous."
+  (if (plist-get metadata :worktree_explicit)
+      metadata
+    (let* ((repo-path (plist-get metadata :repo_path))
+           (branch (plist-get metadata :branch))
+           (matches (and branch
+                         (cl-remove-if-not
+                          (lambda (entry)
+                            (string-equal (plist-get entry :branch) branch))
+                          (my/task--worktrees repo-path)))))
+      (if (= (length matches) 1)
+          (my/task--apply-worktree-entry metadata (car matches))
+        metadata))))
+
 (defun my/task--current-branch (repo-path)
   "Return the current branch name in REPO-PATH."
   (let ((default-directory repo-path))
@@ -433,14 +574,16 @@ GH-REPO so the task can store an unambiguous `GH_URL'."
          (repo-path (plist-get metadata :repo_path))
          (repo-name (plist-get metadata :repo_name))
          (slug (plist-get metadata :slug))
+         (workspace-slug (if (and (not issue)
+                                  (plist-get metadata :branch_explicit))
+                             (my/task--branch-slug
+                              (plist-get metadata :branch_explicit))
+                           slug))
          (workspace (or (plist-get metadata :workspace_explicit)
-                        (plist-get metadata :workspace)
-                        (my/task--derive-workspace repo-name issue slug)))
+                        (my/task--derive-workspace repo-name issue workspace-slug)))
          (branch (or (plist-get metadata :branch_explicit)
-                     (plist-get metadata :branch)
                      (my/task--derive-branch issue slug)))
          (worktree (or (plist-get metadata :worktree_explicit)
-                       (plist-get metadata :worktree)
                        (my/task--derive-worktree repo-path workspace))))
     (setq metadata (plist-put metadata :workspace workspace))
     (setq metadata (plist-put metadata :branch branch))
@@ -539,8 +682,14 @@ base branch. BASE-BRANCH overrides `my/task-default-base-branches'."
          (workspace-prop (my/task--get-property "WORKSPACE" nil))
          (branch-prop (my/task--get-property "BRANCH" nil))
          (worktree-prop (my/task--get-property "WORKTREE" nil))
+         (gh-url (or (my/task--get-property "GH_URL" nil)
+                     (and gh-repo issue
+                          (my/task--github-issue-url gh-repo issue))))
+         (workspace-slug (if (and branch-prop (not issue))
+                             (my/task--branch-slug branch-prop)
+                           slug))
          (workspace (or workspace-prop
-                        (my/task--derive-workspace repo-name issue slug)))
+                        (my/task--derive-workspace repo-name issue workspace-slug)))
          (branch (or branch-prop
                      (my/task--derive-branch issue slug)))
          (worktree (or worktree-prop
@@ -550,7 +699,7 @@ base branch. BASE-BRANCH overrides `my/task-default-base-branches'."
           :repo_name repo-name
           :gh_repo gh-repo
           :gh_issue issue
-          :gh_url (my/task--get-property "GH_URL" nil)
+          :gh_url gh-url
           :pr (my/task--get-property "PR" nil)
           :slug slug
           :gptel_topic (or gptel-topic slug)
@@ -570,6 +719,7 @@ base branch. BASE-BRANCH overrides `my/task-default-base-branches'."
 
 (defun my/task--open-with-metadata (metadata)
   "Open task context using METADATA."
+  (setq metadata (my/task--maybe-adopt-branch-worktree metadata))
   (let ((repo-path (plist-get metadata :repo_path))
         (branch (plist-get metadata :branch))
         (worktree (plist-get metadata :worktree))
@@ -580,6 +730,42 @@ base branch. BASE-BRANCH overrides `my/task-default-base-branches'."
     (my/task--switch-workspace workspace)
     (my/task--open-worktree worktree)
     (my/task--magit-status worktree)))
+
+(defun my/task--open-in-codex (repo-path)
+  "Open REPO-PATH in the Codex macOS app."
+  (start-process "open-codex" nil "open" "-a" "Codex" repo-path))
+
+(defun my/task--repo-plan-location ()
+  "Return a human-readable location for the current task heading."
+  (let ((file (or (buffer-file-name) (buffer-name))))
+    (format "%s:%d" file (line-number-at-pos))))
+
+(defun my/task--codex-handoff-prompt (metadata codex-repo-path)
+  "Return a task handoff prompt for METADATA and CODEX-REPO-PATH."
+  (string-join
+   (delq nil
+         (list
+          (format "Task: %s" (my/task--heading-title))
+          (format "Repo: %s" codex-repo-path)
+          (format "Repo plan: %s" (my/task--repo-plan-location))
+          (when-let ((branch (plist-get metadata :branch)))
+            (format "Suggested branch: %s" branch))
+          (when-let ((issue (plist-get metadata :gh_url)))
+            (format "Issue: %s" issue))
+          ""
+          "Open this from the main repository Codex project. If you need a worktree, create it from Codex so it stays attached to that project."))
+   "\n"))
+
+(defun my/task--show-codex-handoff (prompt)
+  "Display PROMPT in a small handoff buffer and copy it to the kill ring."
+  (kill-new prompt)
+  (with-current-buffer (get-buffer-create "*Org Task Codex Handoff*")
+    (let ((inhibit-read-only t))
+      (erase-buffer)
+      (insert prompt)
+      (goto-char (point-min))
+      (view-mode 1)))
+  (pop-to-buffer "*Org Task Codex Handoff*"))
 
 (defun my/task--derived-property-values ()
   "Return derived task property values without prompting or creating worktrees."
@@ -668,12 +854,24 @@ base branch. BASE-BRANCH overrides `my/task-default-base-branches'."
     (user-error "my-gptel-org-workflow is not loaded"))
   (save-excursion
     (my/task--goto-task-root)
-    (let* ((derived (my/task--derived-property-values))
-           (worktree (or (my/task--get-property "WORKTREE" t)
-                         (cdr (assoc "WORKTREE" derived)))))
+    (let ((worktree (my/task--get-property "WORKTREE" t)))
       (unless worktree
-        (user-error "No WORKTREE property or derived worktree for current task"))
+        (user-error "No WORKTREE property for current task; adopt or open a worktree first"))
       (my/gptel-add-session-allowed-roots (list worktree)))))
+
+;;;###autoload
+(defun my/task-open-worktree-codex-dir ()
+  "Create and open the current task worktree's `.codex' directory."
+  (interactive)
+  (save-excursion
+    (my/task--goto-task-root)
+    (let ((worktree (or (my/task--get-property "WORKTREE" nil)
+                        (user-error "No WORKTREE property for current task"))))
+      (unless (file-directory-p worktree)
+        (user-error "WORKTREE does not exist: %s" worktree))
+      (let ((context-dir (expand-file-name ".codex" worktree)))
+        (make-directory context-dir t)
+        (dired context-dir)))))
 
 ;;;###autoload
 (defun my/task-open ()
@@ -685,13 +883,50 @@ base branch. BASE-BRANCH overrides `my/task-default-base-branches'."
 
 ;;;###autoload
 (defun my/task-init ()
-  "Prepare the current task locally without creating a GitHub issue."
+  "Initialize metadata for the current task without creating a worktree."
   (interactive)
   (save-excursion
     (my/task--goto-task-root)
     (let ((metadata (my/task--collect-metadata)))
-      (my/task--write-derived-properties metadata)
-      (my/task--open-with-metadata metadata))))
+      (my/task--write-metadata-properties metadata)
+      (message "Initialized task metadata; use my/task-open to create or open an Emacs worktree")
+      metadata)))
+
+;;;###autoload
+(defun my/task-open-codex ()
+  "Open Codex at the task's primary repo and prepare a handoff prompt."
+  (interactive)
+  (save-excursion
+    (my/task--goto-task-root)
+    (let* ((metadata (my/task--collect-metadata))
+           (repo-path (plist-get metadata :repo_path))
+           (codex-repo-path (my/task--primary-worktree-path repo-path))
+           (prompt (my/task--codex-handoff-prompt metadata codex-repo-path)))
+      (my/task--write-metadata-properties metadata)
+      (my/task--show-codex-handoff prompt)
+      (my/task--open-in-codex codex-repo-path)
+      (message "Opening Codex in %s; handoff prompt copied" codex-repo-path)
+      metadata)))
+
+;;;###autoload
+(defun my/task-adopt-worktree (&optional worktree)
+  "Attach existing registered WORKTREE to the current task.
+When called interactively, prompt from `git worktree list --porcelain'."
+  (interactive)
+  (save-excursion
+    (my/task--goto-task-root)
+    (let* ((metadata (my/task--collect-metadata))
+           (repo-path (plist-get metadata :repo_path))
+           (entry (if worktree
+                      (my/task--worktree-entry-for-path repo-path worktree)
+                    (my/task--prompt-worktree
+                     repo-path
+                     (plist-get metadata :worktree_explicit)))))
+      (setq metadata (my/task--apply-worktree-entry metadata entry))
+      (my/task--write-metadata-properties metadata)
+      (my/task--set-property "WORKTREE" (plist-get metadata :worktree))
+      (message "Adopted worktree %s" (plist-get metadata :worktree))
+      metadata)))
 
 ;;;###autoload
 (defun my/task-link-issue (issue-ref)
@@ -710,7 +945,7 @@ base branch. BASE-BRANCH overrides `my/task-default-base-branches'."
              :gh_issue (plist-get issue-data :gh_issue)
              :gh_url (plist-get issue-data :gh_url)))
       (setq metadata (my/task--refresh-derived-metadata metadata))
-      (my/task--write-derived-properties metadata)
+      (my/task--write-metadata-properties metadata)
       metadata)))
 
 ;;;###autoload
@@ -734,7 +969,7 @@ base branch. BASE-BRANCH overrides `my/task-default-base-branches'."
 
 ;;;###autoload
 (defun my/task-init-from-branch (branch)
-  "Prepare the current task using an existing local BRANCH."
+  "Bind the current task to an existing local BRANCH."
   (interactive
    (list
     (save-excursion
@@ -742,8 +977,7 @@ base branch. BASE-BRANCH overrides `my/task-default-base-branches'."
       (my/task--prompt-branch (my/task--repo-path)))))
   (save-excursion
     (my/task--goto-task-root)
-    (let* ((metadata (my/task--collect-metadata))
-           (branch-slug (my/task--branch-slug branch)))
+    (let ((metadata (my/task--collect-metadata)))
       (unless (my/task--branch-exists-p (plist-get metadata :repo_path) branch)
         (user-error "Branch does not exist in %s: %s"
                     (plist-get metadata :repo_path)
@@ -752,30 +986,14 @@ base branch. BASE-BRANCH overrides `my/task-default-base-branches'."
             (my/task--metadata-with-overrides
              metadata
              :branch branch
-             :branch_explicit branch
-             :workspace (or (plist-get metadata :workspace_explicit)
-                            (if (plist-get metadata :gh_issue)
-                                (my/task--derive-workspace
-                                 (plist-get metadata :repo_name)
-                                 (plist-get metadata :gh_issue)
-                                 (plist-get metadata :slug))
-                              (my/task--derive-workspace
-                               (plist-get metadata :repo_name)
-                               nil
-                               branch-slug)))
-             :worktree nil))
-      (setq metadata
-            (plist-put metadata :worktree
-                       (or (plist-get metadata :worktree_explicit)
-                           (my/task--derive-worktree
-                            (plist-get metadata :repo_path)
-                            (plist-get metadata :workspace)))))
-      (my/task--write-derived-properties metadata)
-      (my/task--open-with-metadata metadata))))
+             :branch_explicit branch))
+      (setq metadata (my/task--refresh-derived-metadata metadata))
+      (my/task--write-metadata-properties metadata)
+      metadata)))
 
 ;;;###autoload
 (defun my/task-create ()
-  "Create or reuse a GitHub issue for the current task, then open it."
+  "Create or reuse a GitHub issue for the current task."
   (interactive)
   (save-excursion
     (my/task--goto-task-root)
@@ -797,8 +1015,8 @@ base branch. BASE-BRANCH overrides `my/task-default-base-branches'."
                 (setq metadata
                       (my/task--refresh-derived-metadata metadata)))
             (delete-file body-file))))
-      (my/task--write-derived-properties metadata)))
-  (my/task-open))
+      (my/task--write-metadata-properties metadata)
+      metadata)))
 
 ;;;###autoload
 (defun my/task-insert-skeleton (title)

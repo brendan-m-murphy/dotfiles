@@ -11,12 +11,12 @@ The key idea is simple:
 - each repository has one planning file
 - each task is anchored by an Org heading
 - that task heading links planning, AI conversation, GitHub issue metadata,
-  git worktree state, and a Doom workspace
+  branch metadata, and optional worktree/workspace state
 
 This makes it possible to move between planning and implementation without
-losing context. You can plan work in Org, pair program in gptel, create a
-dedicated worktree, switch into a dedicated workspace, and come back later by
-returning to the same task subtree.
+losing context. You can plan work in Org, pair program in gptel, hand a task to
+Codex from the main repo project, or explicitly create a dedicated Emacs
+worktree/workspace when that is useful.
 
 This document is written for someone inheriting the setup. It explains the
 high-level workflow first, then the conventions behind it, and ends with the
@@ -45,7 +45,7 @@ collects:
 - active tasks
 - AI conversation history
 - issue metadata
-- links back to branches, worktrees, and workspaces
+- links back to branches and, when materialized, worktrees and workspaces
 
 This is intentionally separate from the repo so the planning file remains stable
 across branches and worktrees.
@@ -102,6 +102,9 @@ Prompt sent to the model.
 Model response.
 
 #+end_src
+
+The =WORKTREE= and =WORKSPACE= properties appear only after a worktree is
+adopted or an Emacs worktree/workspace has been opened explicitly.
 
 When this task is resumed later, the task heading contains enough metadata to
 recover the implementation context quickly.
@@ -214,25 +217,25 @@ The chosen depth scheme is the compromise that makes both work in the same file.
 3. Add a =*** Notes= section describing the work.
 4. Optionally add more planning notes or prompt/response history.
 5. Choose one of:
-   - =M-x my/task-init= for a local-only task
+   - =M-x my/task-init= to record metadata only
+   - =M-x my/task-open-codex= to hand the task to Codex from the main repo
    - =M-x my/task-link-issue= if the issue already exists
    - =M-x my/task-create= if the issue does not exist yet
 
 *** =M-x my/task-init=
 
-Use this when you want a task-local workspace and worktree without creating a
-new issue.
+Use this when you want to record task metadata without creating a GitHub issue,
+worktree, or workspace.
 
 It will:
 
 - find the task heading
 - resolve the repo
-- derive =BRANCH=, =WORKTREE=, and =WORKSPACE= if needed
-- create or switch to the task workspace
-- open the worktree and Magit
+- derive and store =BRANCH=, =GPTEL_TOPIC=, and =CREATED= if needed
+- leave =WORKTREE= and =WORKSPACE= unset unless they already exist
 
-This is the right command for private configuration work or any task that should
-stay local.
+This is the default command for turning a heading into a tracked repo task
+without deciding yet whether Emacs or Codex should own the worktree.
 
 *** =M-x my/task-create=
 
@@ -243,8 +246,9 @@ stay local.
 - export =Notes= to Markdown
 - create a GitHub issue with =gh=
 - store =GH_REPO=, =GH_ISSUE=, and =GH_URL=
-- derive =BRANCH=, =WORKTREE=, and =WORKSPACE= if needed
-- call =my/task-open=
+- derive and store task metadata such as =BRANCH= and =GPTEL_TOPIC=
+
+It does not create or open a worktree automatically.
 
 *** =M-x my/task-link-issue=
 
@@ -274,8 +278,37 @@ It will:
 
 - prompt for an existing branch
 - store it in =BRANCH=
-- derive =WORKSPACE= and =WORKTREE= if missing
-- open the task environment
+- leave =WORKTREE= and =WORKSPACE= unset
+
+*** =M-x my/task-open-codex=
+
+Use this when Codex should own the implementation worktree.
+
+It will:
+
+- initialize task metadata if needed
+- resolve the primary worktree for =REPO_PATH=
+- open Codex from that main repo path
+- display and copy a handoff prompt with the task, repo-plan location, issue
+  URL, and suggested branch
+
+Opening Codex from the main repo keeps Codex-created worktrees under the same
+Codex project. If Codex creates a worktree, attach it back to the task later
+with =M-x my/task-adopt-worktree=.
+
+*** =M-x my/task-adopt-worktree=
+
+Use this when a worktree already exists, including a Codex-created worktree
+under =~/.codex/worktrees=.
+
+It will:
+
+- read =git worktree list --porcelain= from =REPO_PATH=
+- prompt for a registered worktree
+- store the selected path in =WORKTREE=
+- update =BRANCH= to the selected worktree's branch when it has one
+
+It does not create or switch to a Doom workspace.
 
 ** Reopening an existing task
 
@@ -285,12 +318,15 @@ It will:
 
 - climb to the task heading
 - read the task properties
-- create the git worktree if needed
+- use the stored =WORKTREE= if one exists
+- adopt the only registered worktree for =BRANCH= if there is exactly one
+- otherwise create the git worktree
 - create or switch to the Doom workspace
 - open the worktree
 - open Magit in that worktree
 
-This is the main “resume work” command.
+This is the explicit Emacs environment command. It is no longer part of
+=my/task-init=.
 
 ** Creating tasks without a GitHub issue yet
 
@@ -306,13 +342,17 @@ Once an issue is created or linked, the task can transition to the issue-based
 naming scheme. In the current implementation, existing branch/workspace/worktree
 properties are preserved rather than automatically renamed.
 
+Metadata-only commands write the branch/topic metadata but do not write
+=WORKTREE= or =WORKSPACE=. Those properties are written when a worktree is
+adopted or when an Emacs worktree/workspace is explicitly opened.
+
 * Workspaces and Worktrees
 
 ** Doom workspaces
 
-Each task gets its own Doom workspace.
+Tasks no longer get a Doom workspace automatically.
 
-Workspace names are always repo-prefixed, for example:
+When =M-x my/task-open= is used, workspace names are repo-prefixed, for example:
 
 - =openghg_inversions-iss-417=
 - =openghg_inversions-task-basis-operator-phase-1=
@@ -331,15 +371,17 @@ Switching back to a task workspace restores the practical editing environment.
 
 ** Git worktrees
 
-Each task also gets its own git worktree.
+Tasks no longer get a git worktree automatically.
 
-The layout is:
+When Emacs creates a worktree with =M-x my/task-open=, the layout is:
 
 - main repo: =~/Documents/openghg_inversions=
 - worktree root: =~/Documents/openghg_inversions-wt=
 - task worktree: =~/Documents/openghg_inversions-wt/openghg_inversions-iss-417=
 
 This keeps all task worktrees for a repository under one predictable directory.
+Codex-created worktrees may instead live under =~/.codex/worktrees=. Use
+=M-x my/task-adopt-worktree= to store those paths in the task metadata.
 
 The worktree directory name matches the workspace name. That makes it easier to
 map between:
@@ -362,6 +404,10 @@ If =GH_ISSUE= is absent:
 - workspace: =<repo>-task-<slug>=
 - branch: =<slug>=
 - worktree: =<repo>-wt/<workspace>=
+
+These are derived names for Emacs-owned materialization. Codex handoff opens the
+main repo and lets Codex create its own worktree under the existing Codex
+project.
 
 * Common Workflow Patterns
 
@@ -454,11 +500,18 @@ The typical pattern is:
 
 1. plan the task in Org
 2. use gptel for local thinking, iteration, or prompt preparation if useful
-3. delegate execution to Codex
-4. return to the Org task to record outcomes and continue the next step
+3. run =M-x my/task-open-codex= from the task
+4. let Codex create its own worktree inside the main repo project
+5. optionally run =M-x my/task-adopt-worktree= to store that worktree on the task
+6. return to the Org task to record outcomes and continue the next step
 
 This setup is designed so both modes can coexist without changing the underlying
 task model.
+
+The generic =my/open-in-codex= helper also resolves linked git worktrees back to
+the primary worktree by default, so opening Codex from inside a worktree should
+still land in the main repo's Codex project. Use =my/open-exact-in-codex= only
+when a separate Codex project for the exact directory is intentional.
 
 * Python Workflow Tips
 
@@ -467,8 +520,8 @@ environment early.
 
 Typical pattern:
 
-1. open the task
-2. switch into the worktree
+1. initialize the task or adopt/open a worktree
+2. switch into the materialized worktree
 3. create or sync the environment with =uv sync=
 4. activate whatever project-local tooling is needed
 
@@ -534,8 +587,10 @@ Implements the task-centric workflow:
 - task-root detection
 - property handling
 - issue creation with =gh=
-- worktree creation
-- workspace switching
+- metadata-only task initialization
+- Codex handoff from the primary repo
+- worktree adoption and optional creation
+- optional workspace switching
 - Magit handoff
 
 *** =my-gptel-org-workflow.el=
@@ -593,9 +648,11 @@ Today, the default is:
 
 ** Current task commands
 
-- =my/task-open=: reopen an existing task environment
-- =my/task-init=: create a local-only task environment
-- =my/task-create=: create a new issue and then open the task
+- =my/task-init=: initialize task metadata only
+- =my/task-open-codex=: open Codex from the primary repo and copy a handoff prompt
+- =my/task-adopt-worktree=: attach an existing registered worktree to the task
+- =my/task-open=: create or reopen an Emacs worktree/workspace environment
+- =my/task-create=: create a new issue and update metadata
 - =my/task-link-issue=: attach an existing issue to the task
 - =my/task-init-from-branch=: attach an existing local branch to the task
 - =my/task-describe-properties=: show direct, inherited, file-level, and derived property values
@@ -603,6 +660,7 @@ Today, the default is:
 - =my/task-delete-property=: delete a direct managed task property
 - =my/task-insert-gh-link=: insert an explicit =gh:owner/repo#123= link
 - =my/task-add-worktree-to-gptel-allowed-roots=: add the task worktree to gptel session scope
+- =my/task-open-worktree-codex-dir=: create/open =WORKTREE/.codex=
 
 That matches the current =**= task convention.
 

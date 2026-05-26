@@ -134,10 +134,10 @@
                            "issue-417-basis-operator-phase-1"))
             (should (equal (plist-get metadata :worktree) expected-worktree))))))))
 
-(ert-deftest my/task-init-writes-derived-properties-without-issue ()
+(ert-deftest my/task-init-writes-metadata-only-without-issue ()
   (my/task-test--with-temp-dir repo
-    (let* ((repo-path (file-name-as-directory repo))
-           (repo-name (file-name-nondirectory (directory-file-name repo-path))))
+    (let ((repo-path (file-name-as-directory repo))
+          (opened nil))
       (my/task-test--with-org-buffer
           (concat "#+PROPERTY: REPO_PATH " repo-path "\n"
                   (my/task-test--heading 1 "Repo")
@@ -148,23 +148,18 @@
         (cl-letf (((symbol-function 'my/task--git-root)
                    (lambda (_path) repo-path))
                   ((symbol-function 'my/task--open-with-metadata)
-                   (lambda (_metadata) nil)))
+                   (lambda (_metadata) (setq opened t))))
           (my/task-init)
           (my/task--goto-task-root)
           (should (equal (my/task--get-property "REPO_PATH" nil) repo-path))
-          (should (equal (my/task--get-property "WORKSPACE" nil)
-                         (format "%s-task-basis-operator-phase-1" repo-name)))
           (should (equal (my/task--get-property "GPTEL_TOPIC" nil)
                          "basis-operator-phase-1"))
           (should (my/task--get-property "CREATED" nil))
           (should (equal (my/task--get-property "BRANCH" nil)
                          "basis-operator-phase-1"))
-          (should (equal (my/task--get-property "WORKTREE" nil)
-                         (expand-file-name
-                          (format "%s-task-basis-operator-phase-1" repo-name)
-                          (expand-file-name
-                           (format "%s-wt" repo-name)
-                           (file-name-directory (directory-file-name repo-path)))))))))))
+          (should-not (my/task--get-property "WORKSPACE" nil))
+          (should-not (my/task--get-property "WORKTREE" nil))
+          (should-not opened))))))
 
 (ert-deftest my/task-link-issue-writes-gh-properties ()
   (my/task-test--with-temp-dir repo
@@ -186,10 +181,42 @@
           (should (equal (my/task--get-property "BRANCH" nil) "local-branch"))
           (should (equal (my/task--get-property "WORKTREE" nil) "/tmp/local-ws")))))))
 
-(ert-deftest my/task-init-from-branch-writes-branch-based-properties ()
+(ert-deftest my/task-create-writes-issue-metadata-without-opening-worktree ()
   (my/task-test--with-temp-dir repo
-    (let* ((repo-path (file-name-as-directory repo))
-           (repo-name (file-name-nondirectory (directory-file-name repo-path))))
+    (let ((repo-path (file-name-as-directory repo))
+          (opened nil))
+      (my/task-test--with-org-buffer
+          (concat "#+PROPERTY: REPO_PATH " repo-path "\n"
+                  (my/task-test--heading 1 "Repo")
+                  (my/task-test--heading my/task-heading-level "Basis operator phase 1")
+                  (my/task-test--heading (1+ my/task-heading-level) "Notes")
+                  "Some notes.\n")
+        (goto-char (point-max))
+        (cl-letf (((symbol-function 'my/task--git-root)
+                   (lambda (_path) repo-path))
+                  ((symbol-function 'my/task--prompt-issue-title)
+                   (lambda () "Basis operator phase 1"))
+                  ((symbol-function 'my/task--gh-create-issue)
+                   (lambda (_repo _title _body-file)
+                     '(:gh_repo "org/repo"
+                       :gh_issue "417"
+                       :gh_url "https://github.com/org/repo/issues/417")))
+                  ((symbol-function 'my/task--open-with-metadata)
+                   (lambda (_metadata) (setq opened t))))
+          (my/task-create)
+          (my/task--goto-task-root)
+          (should (equal (my/task--get-property "GH_REPO" nil) "org/repo"))
+          (should (equal (my/task--get-property "GH_ISSUE" nil) "417"))
+          (should (equal (my/task--get-property "BRANCH" nil)
+                         "issue-417-basis-operator-phase-1"))
+          (should-not (my/task--get-property "WORKSPACE" nil))
+          (should-not (my/task--get-property "WORKTREE" nil))
+          (should-not opened))))))
+
+(ert-deftest my/task-init-from-branch-writes-branch-metadata-only ()
+  (my/task-test--with-temp-dir repo
+    (let ((repo-path (file-name-as-directory repo))
+          (opened nil))
       (my/task-test--with-org-buffer
           (concat "#+PROPERTY: REPO_PATH " repo-path "\n"
                   (my/task-test--heading 1 "Repo")
@@ -203,18 +230,13 @@
                    (lambda (_repo branch)
                      (string-equal branch "feature/takeover")))
                   ((symbol-function 'my/task--open-with-metadata)
-                   (lambda (_metadata) nil)))
+                   (lambda (_metadata) (setq opened t))))
           (my/task-init-from-branch "feature/takeover")
           (my/task--goto-task-root)
           (should (equal (my/task--get-property "BRANCH" nil) "feature/takeover"))
-          (should (equal (my/task--get-property "WORKSPACE" nil)
-                         (format "%s-task-feature-takeover" repo-name)))
-          (should (equal (my/task--get-property "WORKTREE" nil)
-                         (expand-file-name
-                          (format "%s-task-feature-takeover" repo-name)
-                          (expand-file-name
-                           (format "%s-wt" repo-name)
-                           (file-name-directory (directory-file-name repo-path)))))))))))
+          (should-not (my/task--get-property "WORKSPACE" nil))
+          (should-not (my/task--get-property "WORKTREE" nil))
+          (should-not opened))))))
 
 (ert-deftest my/task-ensure-worktree-creates-worktree-root-and-branch ()
   (let ((created-dir nil)
@@ -258,6 +280,135 @@
              (lambda (_repo) "feature/in-progress")))
     (should-error (my/task--assert-base-ready "/tmp/repo/" "main")
                   :type 'user-error)))
+
+(ert-deftest my/task-parse-worktree-list-captures-branches-and-detached ()
+  (let ((entries (my/task--parse-worktree-list
+                  (concat "worktree /tmp/repo\n"
+                          "HEAD abc\n"
+                          "branch refs/heads/main\n"
+                          "\n"
+                          "worktree /tmp/repo-wt/task\n"
+                          "HEAD def\n"
+                          "branch refs/heads/codex/feature\n"
+                          "\n"
+                          "worktree /tmp/repo-wt/detached\n"
+                          "HEAD 123\n"
+                          "detached\n"))))
+    (should (= (length entries) 3))
+    (should (equal (plist-get (car entries) :path) "/tmp/repo"))
+    (should (equal (plist-get (car entries) :branch) "main"))
+    (should (equal (plist-get (cadr entries) :branch) "codex/feature"))
+    (should (plist-get (caddr entries) :detached))
+    (should-not (plist-get (caddr entries) :branch))))
+
+(ert-deftest my/task-adopt-worktree-writes-worktree-and-branch-only ()
+  (my/task-test--with-temp-dir repo
+    (let ((repo-path (file-name-as-directory repo)))
+      (my/task-test--with-org-buffer
+          (concat "#+PROPERTY: REPO_PATH " repo-path "\n"
+                  (my/task-test--heading 1 "Repo")
+                  (my/task-test--heading my/task-heading-level "Task"))
+        (goto-char (point-max))
+        (cl-letf (((symbol-function 'my/task--git-root)
+                   (lambda (_path) repo-path))
+                  ((symbol-function 'my/task--worktrees)
+                   (lambda (_repo)
+                     (list (list :path "/tmp/codex/repo"
+                                 :branch "codex/task")))))
+          (my/task-adopt-worktree "/tmp/codex/repo")
+          (my/task--goto-task-root)
+          (should (equal (my/task--get-property "WORKTREE" nil)
+                         "/tmp/codex/repo"))
+          (should (equal (my/task--get-property "BRANCH" nil)
+                         "codex/task"))
+          (should-not (my/task--get-property "WORKSPACE" nil)))))))
+
+(ert-deftest my/task-open-uses-explicit-worktree-property ()
+  (my/task-test--with-temp-dir repo
+    (let ((repo-path (file-name-as-directory repo))
+          (opened nil)
+          (workspace nil))
+      (my/task-test--with-org-buffer
+          (concat "#+PROPERTY: REPO_PATH " repo-path "\n"
+                  (my/task-test--heading 1 "Repo")
+                  (my/task-test--heading my/task-heading-level "Task")
+                  ":PROPERTIES:\n"
+                  ":BRANCH: codex/task\n"
+                  ":WORKTREE: /tmp/codex/repo\n"
+                  ":END:\n")
+        (goto-char (point-max))
+        (cl-letf (((symbol-function 'my/task--git-root)
+                   (lambda (_path) repo-path))
+                  ((symbol-function 'my/task--ensure-worktree)
+                   (lambda (_repo _branch worktree &optional _base)
+                     (setq opened worktree)))
+                  ((symbol-function 'my/task--switch-workspace)
+                   (lambda (name) (setq workspace name)))
+                  ((symbol-function 'my/task--open-worktree) (lambda (&rest _) nil))
+                  ((symbol-function 'my/task--magit-status) (lambda (&rest _) nil)))
+          (my/task-open)
+          (should (equal opened "/tmp/codex/repo"))
+          (should (equal workspace
+                         (format "%s-task-codex-task"
+                                 (file-name-nondirectory
+                                  (directory-file-name repo-path))))))))))
+
+(ert-deftest my/task-open-adopts-unique-worktree-for-branch ()
+  (my/task-test--with-temp-dir repo
+    (let ((repo-path (file-name-as-directory repo))
+          (opened nil))
+      (my/task-test--with-org-buffer
+          (concat "#+PROPERTY: REPO_PATH " repo-path "\n"
+                  (my/task-test--heading 1 "Repo")
+                  (my/task-test--heading my/task-heading-level "Task")
+                  ":PROPERTIES:\n:BRANCH: codex/task\n:END:\n")
+        (goto-char (point-max))
+        (cl-letf (((symbol-function 'my/task--git-root)
+                   (lambda (_path) repo-path))
+                  ((symbol-function 'my/task--worktrees)
+                   (lambda (_repo)
+                     (list (list :path repo-path :branch "main")
+                           (list :path "/tmp/codex/repo" :branch "codex/task"))))
+                  ((symbol-function 'my/task--ensure-worktree)
+                   (lambda (_repo _branch worktree &optional _base)
+                     (setq opened worktree)))
+                  ((symbol-function 'my/task--switch-workspace) (lambda (&rest _) nil))
+                  ((symbol-function 'my/task--open-worktree) (lambda (&rest _) nil))
+                  ((symbol-function 'my/task--magit-status) (lambda (&rest _) nil)))
+          (my/task-open)
+          (my/task--goto-task-root)
+          (should (equal opened "/tmp/codex/repo"))
+          (should (equal (my/task--get-property "WORKTREE" nil)
+                         "/tmp/codex/repo")))))))
+
+(ert-deftest my/task-open-codex-uses-primary-repo-not-worktree ()
+  (my/task-test--with-temp-dir repo
+    (let ((repo-path (file-name-as-directory repo))
+          (opened nil)
+          (prompt nil))
+      (my/task-test--with-org-buffer
+          (concat "#+PROPERTY: REPO_PATH " repo-path "\n"
+                  (my/task-test--heading 1 "Repo")
+                  (my/task-test--heading my/task-heading-level "Task")
+                  ":PROPERTIES:\n"
+                  ":BRANCH: codex/task\n"
+                  ":WORKTREE: /tmp/codex/repo\n"
+                  ":END:\n")
+        (goto-char (point-max))
+        (cl-letf (((symbol-function 'my/task--git-root)
+                   (lambda (_path) repo-path))
+                  ((symbol-function 'my/task--primary-worktree-path)
+                   (lambda (_repo) repo-path))
+                  ((symbol-function 'my/task--open-in-codex)
+                   (lambda (repo) (setq opened repo)))
+                  ((symbol-function 'my/task--show-codex-handoff)
+                   (lambda (text) (setq prompt text))))
+          (my/task-open-codex)
+          (should (equal opened repo-path))
+          (should (string-match-p "Suggested branch: codex/task" prompt))
+          (my/task--goto-task-root)
+          (should (equal (my/task--get-property "WORKTREE" nil)
+                         "/tmp/codex/repo")))))))
 
 (ert-deftest my/task-active-headings-report-parses-properties ()
   (let ((file nil))
