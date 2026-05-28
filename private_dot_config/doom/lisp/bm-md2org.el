@@ -139,29 +139,34 @@ Only headings of the form:
 
 are considered.  Setext headings are intentionally ignored."
   (let ((case-fold-search nil)
-        matches)
-    (with-temp-buffer
-      (insert text)
-      (goto-char (point-min))
-      (while (re-search-forward "^#\\s-+\\(.+?\\)\\s-*#*\\s-*$" nil t)
-        (push (list :beg (line-beginning-position)
-                    :end (min (point-max) (1+ (line-end-position)))
-                    :title (string-trim (match-string-no-properties 1)))
-              matches)))
+        matches
+        (pos 0))
+    (while (string-match "^#\\s-+\\(.+?\\)\\s-*#*\\s-*$" text pos)
+      (push (list :beg (match-beginning 0)
+                  :end (match-end 0)
+                  :title (string-trim (match-string 1 text)))
+            matches)
+      (setq pos (match-end 0)))
     (when (= (length matches) 1)
       (let* ((match (car matches))
              (beg (plist-get match :beg))
              (end (plist-get match :end))
              (title (plist-get match :title))
+             ;; Also remove one following newline if present, so we do not
+             ;; leave an extra blank/partial heading behind.
+             (remove-end
+              (if (and (< end (length text))
+                       (eq (aref text end) ?\n))
+                  (1+ end)
+                end))
              (body (concat (substring text 0 beg)
-                           (substring text end))))
+                           (substring text remove-end))))
         (cons title body)))))
 
 (defun bm-md2org--promote-org-headings (org-text)
   "Promote all Org headings in ORG-TEXT by one level.
 
-A heading like ** Foo becomes * Foo.  Top-level headings remain top-level,
-though this function is usually used after a Markdown H1 has been removed."
+A heading like ** Foo becomes * Foo.  Top-level headings remain top-level."
   (with-temp-buffer
     (insert org-text)
     (goto-char (point-min))
@@ -174,15 +179,158 @@ though this function is usually used after a Markdown H1 has been removed."
        1))
     (buffer-string)))
 
+(defun bm-md2org--marker-line-p (line)
+  "Return marker text if LINE is an HTML marker comment.
+
+For example, this line:
+
+  <!-- gh-issues:start -->
+
+returns:
+
+  \"gh-issues:start\""
+  (when (string-match
+         "\\`[[:space:]]*<!--[[:space:]]-*\\([^>]+?\\)[[:space:]]-*-->[[:space:]]*\\'"
+         line)
+    (string-trim (match-string 1 line))))
+
 (defun bm-md2org--split-marker (marker)
-  "Return (NAME KIND) for MARKER if it looks like NAME:KIND.
+  "Return (NAME KIND) for MARKER.
 
-For example:
+Recognised named markers are:
 
-  gh-issues:start => (\"gh-issues\" \"start\")"
-  (when (string-match "\\`\\(.+\\):\\(start\\|end\\)\\'" marker)
+  NAME:start
+  NAME:end
+
+Also recognised anonymous markers are:
+
+  start
+  end
+
+Anonymous markers return nil as NAME."
+  (cond
+   ((string-match "\\`\\(.+\\):\\(start\\|end\\)\\'" marker)
     (list (match-string 1 marker)
-          (match-string 2 marker))))
+          (match-string 2 marker)))
+   ((member marker '("start" "end"))
+    (list nil marker))
+   (t
+    nil)))
+
+(defun bm-md2org--example-block (body &optional name)
+  "Return BODY wrapped as an Org example block.
+
+If NAME is non-nil, add a preceding #+name line."
+  (concat
+   (when name
+     (format "#+name: %s\n" name))
+   "#+begin_example\n"
+   (string-remove-suffix "\n" body)
+   "\n#+end_example\n\n"))
+
+(defun bm-md2org--convert-with-example-regions (markdown-text)
+  "Convert MARKDOWN-TEXT to Org, preserving marked regions as example blocks.
+
+Marked regions are delimited by lines like:
+
+  <!-- gh-issues:start -->
+  ...
+  <!-- gh-issues:end -->
+
+The body between the markers is preserved literally inside an Org example
+block.  If the start and end markers use the same NAME, the block gets:
+
+  #+name: NAME
+
+Anonymous <!-- start --> / <!-- end --> markers are also supported, but do not
+receive a #+name line."
+  (let ((lines (split-string markdown-text "\n"))
+        normal-lines
+        example-lines
+        in-example
+        example-name
+        output-parts)
+
+    (cl-labels
+        ((flush-normal
+          ()
+          (when normal-lines
+            (let ((chunk (mapconcat #'identity (nreverse normal-lines) "\n")))
+              (unless (string-empty-p (string-trim chunk))
+                (push (bm-md2org--pandoc-string (concat chunk "\n"))
+                      output-parts)))
+            (setq normal-lines nil)))
+         (flush-example
+          ()
+          (push (bm-md2org--example-block
+                 (concat (mapconcat #'identity (nreverse example-lines) "\n")
+                         "\n")
+                 example-name)
+                output-parts)
+          (setq example-lines nil
+                example-name nil
+                in-example nil)))
+
+      (dolist (line lines)
+        (let* ((marker (bm-md2org--marker-line-p line))
+               (parts (and marker (bm-md2org--split-marker marker)))
+               (name (nth 0 parts))
+               (kind (nth 1 parts)))
+          (cond
+           ;; Start of an example region.
+           ((and parts (string= kind "start") (not in-example))
+            (flush-normal)
+            (setq in-example t
+                  example-name name
+                  example-lines nil))
+
+           ;; End of a matching example region.
+           ((and parts
+                 (string= kind "end")
+                 in-example
+                 (equal name example-name))
+            (flush-example))
+
+           ;; Any other line while inside an example region is preserved.
+           (in-example
+            (push line example-lines))
+
+           ;; Otherwise it is normal Markdown.
+           (t
+            (push line normal-lines)))))
+
+      ;; If a start marker was never closed, do not silently drop content.
+      ;; Treat the opening marker and body as normal Markdown-ish text.
+      (when in-example
+        (push (format "<!-- %s:start -->" example-name) normal-lines)
+        (dolist (line (nreverse example-lines))
+          (push line normal-lines))
+        (setq in-example nil
+              example-lines nil
+              example-name nil))
+
+      (flush-normal))
+
+    (mapconcat #'identity (nreverse output-parts) "")))
+
+(defun bm-md2org-convert-string (markdown-text &optional single-h1-to-title)
+  "Convert MARKDOWN-TEXT to Org.
+
+When SINGLE-H1-TO-TITLE is non-nil, convert a single Markdown H1 to #+TITLE
+and promote remaining Org headings by one level."
+  (let* ((title-body
+          (and single-h1-to-title
+               (bm-md2org--extract-single-h1-title markdown-text)))
+         (title (car-safe title-body))
+         (body (or (cdr-safe title-body) markdown-text))
+         (org-body (bm-md2org--convert-with-example-regions body)))
+    (when title-body
+      (setq org-body (bm-md2org--promote-org-headings org-body)))
+    (concat
+     (when title
+       (format "#+TITLE: %s\n\n" title))
+     (string-trim-right org-body)
+     "\n")))
 
 (defun bm-md2org--find-example-regions (text)
   "Find marker-delimited example regions in TEXT.
@@ -239,58 +387,6 @@ with the same NAME."
             (< (plist-get a :start-beg)
                (plist-get b :start-beg))))))
 
-(defun bm-md2org--example-block (body &optional name)
-  "Return BODY wrapped as an Org example block.
-
-If NAME is non-nil, add a preceding #+name line."
-  (concat
-   (when name
-     (format "#+name: %s\n" name))
-   "#+begin_example\n"
-   (string-remove-suffix "\n" body)
-   "\n#+end_example\n"))
-
-(defun bm-md2org--convert-with-example-regions (markdown-text)
-  "Convert MARKDOWN-TEXT to Org, preserving marked regions as example blocks."
-  (let ((regions (bm-md2org--find-example-regions markdown-text))
-        (pos 0)
-        parts)
-    (dolist (region regions)
-      (let ((start-beg (plist-get region :start-beg))
-            (end-end (plist-get region :end-end))
-            (name (plist-get region :name))
-            (body (plist-get region :body)))
-        ;; Convert normal Markdown before the marked region.
-        (push (bm-md2org--pandoc-string
-               (substring markdown-text pos start-beg))
-              parts)
-        ;; Preserve the marked region body literally.
-        (push (bm-md2org--example-block body name) parts)
-        (setq pos end-end)))
-    ;; Convert remaining Markdown.
-    (push (bm-md2org--pandoc-string
-           (substring markdown-text pos))
-          parts)
-    (mapconcat #'identity (nreverse parts) "")))
-
-(defun bm-md2org-convert-string (markdown-text &optional single-h1-to-title)
-  "Convert MARKDOWN-TEXT to Org.
-
-When SINGLE-H1-TO-TITLE is non-nil, convert a single Markdown H1 to #+TITLE
-and promote remaining Org headings by one level."
-  (let* ((title-body
-          (and single-h1-to-title
-               (bm-md2org--extract-single-h1-title markdown-text)))
-         (title (car-safe title-body))
-         (body (or (cdr-safe title-body) markdown-text))
-         (org-body (bm-md2org--convert-with-example-regions body)))
-    (when title-body
-      (setq org-body (bm-md2org--promote-org-headings org-body)))
-    (concat
-     (when title
-       (format "#+TITLE: %s\n\n" title))
-     (string-trim-right org-body)
-     "\n")))
 
 (defun bm-md2org--output-file-for-current-buffer ()
   "Return the .org output path for the current Markdown buffer."
