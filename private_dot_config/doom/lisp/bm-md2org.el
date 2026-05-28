@@ -99,21 +99,22 @@ a name."
     (user-error "Could not find pandoc executable: %s" bm-md2org-pandoc-command))
   (if (string-empty-p text)
       ""
-    (let ((stderr-file (make-temp-file "bm-md2org-pandoc-stderr-")))
+    (let ((input-file (make-temp-file "bm-md2org-input-" nil ".md"))
+          (output-file (make-temp-file "bm-md2org-output-" nil ".org"))
+          (stderr-file (make-temp-file "bm-md2org-stderr-")))
       (unwind-protect
-          (with-temp-buffer
-            (insert text)
+          (progn
+            (with-temp-file input-file
+              (insert text))
             (let ((exit-code
-                   (apply #'call-process-region
-                          (point-min)
-                          (point-max)
+                   (apply #'call-process
                           bm-md2org-pandoc-command
                           nil
-                          ;; Destination: stdout goes to current buffer;
-                          ;; stderr goes to a temporary file.
-                          (list t stderr-file)
+                          (list nil stderr-file)
                           nil
-                          (bm-md2org--pandoc-args))))
+                          (append
+                           (bm-md2org--pandoc-args)
+                           (list "-o" output-file input-file)))))
               (unless (zerop exit-code)
                 (let ((stderr
                        (if (file-exists-p stderr-file)
@@ -126,9 +127,12 @@ a name."
                               exit-code
                               (if (string-empty-p stderr) "" ": ")
                               stderr)))
-              (buffer-string)))
-        (when (file-exists-p stderr-file)
-          (delete-file stderr-file))))))
+              (with-temp-buffer
+                (insert-file-contents output-file)
+                (buffer-string))))
+        (dolist (file (list input-file output-file stderr-file))
+          (when (file-exists-p file)
+            (delete-file file)))))))
 
 (defun bm-md2org--extract-single-h1-title (text)
   "Return (TITLE . BODY) if TEXT has exactly one Markdown ATX H1.
