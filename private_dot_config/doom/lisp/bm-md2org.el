@@ -99,7 +99,7 @@ a name."
     (user-error "Could not find pandoc executable: %s" bm-md2org-pandoc-command))
   (if (string-empty-p text)
       ""
-    (let ((errbuf (generate-new-buffer " *bm-md2org-pandoc-stderr*")))
+    (let ((stderr-file (make-temp-file "bm-md2org-pandoc-stderr-")))
       (unwind-protect
           (with-temp-buffer
             (insert text)
@@ -109,20 +109,26 @@ a name."
                           (point-max)
                           bm-md2org-pandoc-command
                           nil
-                          (list t errbuf)
+                          ;; Destination: stdout goes to current buffer;
+                          ;; stderr goes to a temporary file.
+                          (list t stderr-file)
                           nil
                           (bm-md2org--pandoc-args))))
               (unless (zerop exit-code)
                 (let ((stderr
-                       (with-current-buffer errbuf
-                         (string-trim (buffer-string)))))
+                       (if (file-exists-p stderr-file)
+                           (string-trim
+                            (with-temp-buffer
+                              (insert-file-contents stderr-file)
+                              (buffer-string)))
+                         "")))
                   (user-error "pandoc failed with exit code %s%s%s"
                               exit-code
                               (if (string-empty-p stderr) "" ": ")
                               stderr)))
               (buffer-string)))
-        (when (buffer-live-p errbuf)
-          (kill-buffer errbuf))))))
+        (when (file-exists-p stderr-file)
+          (delete-file stderr-file))))))
 
 (defun bm-md2org--extract-single-h1-title (text)
   "Return (TITLE . BODY) if TEXT has exactly one Markdown ATX H1.
