@@ -268,59 +268,21 @@
 
 (advice-add 'org-babel-insert-result :after #'my/org-babel-truncate-result-maybe)
 
-;; convert md buffer to org
-(defun bm/md-buffer-to-org-file (&optional overwrite)
-  "Convert the current Markdown buffer to an Org file using pandoc.
 
-The output file is the current buffer file name with a final `.md' or
-`.markdown' extension replaced by `.org'.
+;;; Markdown to Org conversion helpers
 
-With prefix argument OVERWRITE, overwrite an existing output file.
-Without prefix argument, signal an error if the output file already exists."
-  (interactive "P")
-  (unless buffer-file-name
-    (user-error "Current buffer is not visiting a file"))
+(use-package! bm-md2org
+  :load-path "lisp"
+  :commands (bm/md-buffer-to-org-file
+             bm/md-region-to-org-popup)
+  :init
+  (map! :leader
+        (:prefix ("m c" . "convert")
+         :desc "Markdown buffer to Org file"
+         "o" #'bm/md-buffer-to-org-file
+         :desc "Markdown region to Org popup"
+         "O" #'bm/md-region-to-org-popup)))
 
-  (let* ((input-file (file-truename buffer-file-name))
-         (output-file
-          (cond
-           ((string-match-p "\\.md\\'" input-file)
-            (replace-regexp-in-string "\\.md\\'" ".org" input-file))
-           ((string-match-p "\\.markdown\\'" input-file)
-            (replace-regexp-in-string "\\.markdown\\'" ".org" input-file))
-           (t
-            (user-error "Current file does not end in .md or .markdown"))))
-         (format-from "markdown+lists_without_preceding_blankline-auto_identifiers")
-         (format-to "org"))
-
-    (unless (executable-find "pandoc")
-      (user-error "Could not find pandoc on exec-path"))
-
-    (when (and (file-exists-p output-file)
-               (not overwrite))
-      (user-error "Output file already exists: %s" output-file))
-
-    ;; Save first so pandoc sees the current buffer contents.
-    (when (buffer-modified-p)
-      (save-buffer))
-
-    (let ((exit-code
-           (call-process
-            "pandoc"
-            nil
-            "*pandoc md2org*"
-            nil
-            "-f" format-from
-            "-t" format-to
-            "--wrap=preserve"
-            "-o" output-file
-            input-file)))
-      (if (zerop exit-code)
-          (progn
-            (message "Wrote %s" output-file)
-            (find-file output-file))
-        (pop-to-buffer "*pandoc md2org*")
-        (user-error "pandoc failed with exit code %s" exit-code)))))
 
 ;; BASIC CONFIG
 (setq doom-font-increment 1)
