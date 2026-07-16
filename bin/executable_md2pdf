@@ -11,32 +11,35 @@ usage() {
 
 input=$1
 output=${2:-"${input%.*}.pdf"}
+pdf_engine=${PANDOC_PDF_ENGINE:-xelatex}
 
 [[ -f "$input" ]] || {
     printf 'Error: input file not found: %s\n' "$input" >&2
     exit 1
 }
 
-command -v pandoc >/dev/null 2>&1 || {
-    printf 'Error: pandoc is not installed or not on PATH.\n' >&2
+command -v pandoc >/dev/null || {
+    printf 'Error: pandoc is not installed.\n' >&2
     exit 1
 }
 
-pdf_engine=${PANDOC_PDF_ENGINE:-xelatex}
-
-command -v "$pdf_engine" >/dev/null 2>&1 || {
+command -v "$pdf_engine" >/dev/null || {
     printf "Error: PDF engine '%s' is not installed.\n" "$pdf_engine" >&2
-    printf 'Set PANDOC_PDF_ENGINE to xelatex, lualatex, or another installed engine.\n' >&2
     exit 1
 }
 
-input_dir=$(cd "$(dirname "$input")" && pwd)
+input_dir=$(cd -- "$(dirname -- "$input")" && pwd)
+
+# Pandoc Markdown already enables pipe tables, fenced code blocks,
+# strikethrough, and task lists. These additions make it more GFM-like
+# while allowing \( ... \) and \[ ... \] math.
+reader='markdown+tex_math_single_backslash+autolink_bare_uris+gfm_auto_identifiers'
 
 pandoc "$input" \
-    --from='commonmark_x+tex_math_single_backslash' \
+    --from="$reader" \
     --standalone \
     --pdf-engine="$pdf_engine" \
-    --resource-path="$input_dir" \
+    --resource-path="$input_dir:." \
     --output="$output"
 
 printf 'Created: %s\n' "$output"
