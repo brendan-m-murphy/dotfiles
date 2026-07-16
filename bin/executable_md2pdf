@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 
 usage() {
-    echo "Usage: $(basename "$0") INPUT.md [OUTPUT.pdf]" >&2
+    printf 'Usage: %s INPUT.md [OUTPUT.pdf]\n' "$(basename "$0")" >&2
     exit 2
 }
 
@@ -13,32 +13,30 @@ input=$1
 output=${2:-"${input%.*}.pdf"}
 
 [[ -f "$input" ]] || {
-    echo "Error: input file not found: $input" >&2
+    printf 'Error: input file not found: %s\n' "$input" >&2
     exit 1
 }
 
 command -v pandoc >/dev/null 2>&1 || {
-    echo "Error: pandoc is not installed or not on PATH." >&2
+    printf 'Error: pandoc is not installed or not on PATH.\n' >&2
     exit 1
 }
 
-# XeLaTeX generally handles Unicode Markdown documents better than pdflatex.
 pdf_engine=${PANDOC_PDF_ENGINE:-xelatex}
 
 command -v "$pdf_engine" >/dev/null 2>&1 || {
-    echo "Error: PDF engine '$pdf_engine' is not installed." >&2
-    echo "Set PANDOC_PDF_ENGINE to another engine, e.g. lualatex or tectonic." >&2
+    printf "Error: PDF engine '%s' is not installed.\n" "$pdf_engine" >&2
+    printf 'Set PANDOC_PDF_ENGINE to xelatex, lualatex, or another installed engine.\n' >&2
     exit 1
 }
 
 input_dir=$(cd "$(dirname "$input")" && pwd)
 
 pandoc "$input" \
-    --from='gfm+tex_math_single_backslash+tex_math_dollars' \
-    --to=pdf \
+    --from='commonmark_x+tex_math_single_backslash' \
     --standalone \
     --pdf-engine="$pdf_engine" \
     --resource-path="$input_dir" \
     --output="$output"
 
-echo "Created: $output"
+printf 'Created: %s\n' "$output"
