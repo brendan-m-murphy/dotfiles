@@ -3,43 +3,155 @@
 set -Eeuo pipefail
 
 usage() {
-    printf 'Usage: %s INPUT.md [OUTPUT.pdf]\n' "$(basename "$0")" >&2
+    cat <<EOF_USAGE
+Usage: $(basename "$0") [OPTIONS] INPUT.md [OUTPUT.pdf] [-- PANDOC_OPTIONS...]
+
+Convert Markdown to PDF with Pandoc.
+
+Options:
+  -t, --toc                    Add a table of contents.
+  -N, --number-sections        Number section headings.
+      --toc-depth N            Include headings through level N; implies --toc.
+      --pdf-engine ENGINE      PDF engine (default: \$PANDOC_PDF_ENGINE or xelatex).
+      --reader READER          Pandoc input format/reader extensions.
+  -P, --pandoc-option ARG      Pass one additional argument to Pandoc; repeatable.
+  -h, --help                   Show this help.
+
+Everything after -- is passed directly to Pandoc. Put INPUT.md and the optional
+OUTPUT.pdf before --.
+
+Examples:
+  $(basename "$0") --toc --number-sections notes.md notes.pdf
+  $(basename "$0") -t -N --toc-depth 3 notes.md
+  $(basename "$0") notes.md notes.pdf -- --variable=geometry:margin=1in
+  $(basename "$0") -P --highlight-style -P tango notes.md
+EOF_USAGE
+}
+
+die() {
+    printf 'Error: %s\n' "$*" >&2
     exit 2
 }
 
-[[ $# -ge 1 && $# -le 2 ]] || usage
-
-input=$1
-output=${2:-"${input%.*}.pdf"}
+reader='markdown+tex_math_single_backslash+autolink_bare_uris+gfm_auto_identifiers'
 pdf_engine=${PANDOC_PDF_ENGINE:-xelatex}
+add_toc=false
+number_sections=false
+toc_depth=''
+pandoc_extra=()
+positional=()
 
-[[ -f "$input" ]] || {
+while (($#)); do
+    case $1 in
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        -t|--toc)
+            add_toc=true
+            shift
+            ;;
+        -N|--number-sections)
+            number_sections=true
+            shift
+            ;;
+        --toc-depth)
+            (($# >= 2)) || die '--toc-depth requires an argument'
+            toc_depth=$2
+            add_toc=true
+            shift 2
+            ;;
+        --toc-depth=*)
+            toc_depth=${1#*=}
+            add_toc=true
+            shift
+            ;;
+        --pdf-engine)
+            (($# >= 2)) || die '--pdf-engine requires an argument'
+            pdf_engine=$2
+            shift 2
+            ;;
+        --pdf-engine=*)
+            pdf_engine=${1#*=}
+            shift
+            ;;
+        --reader)
+            (($# >= 2)) || die '--reader requires an argument'
+            reader=$2
+            shift 2
+            ;;
+        --reader=*)
+            reader=${1#*=}
+            shift
+            ;;
+        -P|--pandoc-option)
+            (($# >= 2)) || die "$1 requires an argument"
+            pandoc_extra+=("$2")
+            shift 2
+            ;;
+        --pandoc-option=*)
+            pandoc_extra+=("${1#*=}")
+            shift
+            ;;
+        --)
+            shift
+            pandoc_extra+=("$@")
+            break
+            ;;
+        -*)
+            die "unknown option '$1'; place raw Pandoc options after -- or use -P"
+            ;;
+        *)
+            positional+=("$1")
+            ((${#positional[@]} <= 2)) || die 'too many positional arguments'
+            shift
+            ;;
+    esac
+done
+
+((${#positional[@]} >= 1)) || {
+    usage >&2
+    exit 2
+}
+
+if [[ -n $toc_depth && ! $toc_depth =~ ^[1-9][0-9]*$ ]]; then
+    die '--toc-depth must be a positive integer'
+fi
+
+input=${positional[0]}
+output=${positional[1]:-"${input%.*}.pdf"}
+
+[[ -f $input ]] || {
     printf 'Error: input file not found: %s\n' "$input" >&2
     exit 1
 }
 
-command -v pandoc >/dev/null || {
+command -v pandoc >/dev/null 2>&1 || {
     printf 'Error: pandoc is not installed.\n' >&2
     exit 1
 }
 
-command -v "$pdf_engine" >/dev/null || {
+command -v "$pdf_engine" >/dev/null 2>&1 || {
     printf "Error: PDF engine '%s' is not installed.\n" "$pdf_engine" >&2
     exit 1
 }
 
 input_dir=$(cd -- "$(dirname -- "$input")" && pwd)
 
-# Pandoc Markdown already enables pipe tables, fenced code blocks,
-# strikethrough, and task lists. These additions make it more GFM-like
-# while allowing \( ... \) and \[ ... \] math.
-reader='markdown+tex_math_single_backslash+autolink_bare_uris+gfm_auto_identifiers'
-
-pandoc "$input" \
-    --from="$reader" \
-    --standalone \
-    --pdf-engine="$pdf_engine" \
-    --resource-path="$input_dir:." \
+pandoc_args=(
+    "$input"
+    "${pandoc_extra[@]}"
+    --from="$reader"
+    --standalone
+    --pdf-engine="$pdf_engine"
+    --resource-path="$input_dir:."
     --output="$output"
+)
+
+$add_toc && pandoc_args+=(--toc)
+$number_sections && pandoc_args+=(--number-sections)
+[[ -z $toc_depth ]] || pandoc_args+=(--toc-depth="$toc_depth")
+
+pandoc "${pandoc_args[@]}"
 
 printf 'Created: %s\n' "$output"
