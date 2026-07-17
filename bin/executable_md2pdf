@@ -11,6 +11,9 @@ Convert Markdown to PDF with Pandoc.
 Options:
   -t, --toc                    Add a table of contents.
   -N, --number-sections        Number section headings.
+  -T, --title-from-first-heading
+                               Promote the first level-one heading to the PDF title
+                               and shift subsequent heading levels up by one.
       --toc-depth N            Include headings through level N; implies --toc.
       --pdf-engine ENGINE      PDF engine (default: \$PANDOC_PDF_ENGINE or xelatex).
       --reader READER          Pandoc input format/reader extensions.
@@ -23,6 +26,7 @@ OUTPUT.pdf before --.
 Examples:
   $(basename "$0") --toc --number-sections notes.md notes.pdf
   $(basename "$0") -t -N --toc-depth 3 notes.md
+  $(basename "$0") -T -t -N notes.md notes.pdf
   $(basename "$0") notes.md notes.pdf -- --variable=geometry:margin=1in
   $(basename "$0") -P --highlight-style -P tango notes.md
 EOF_USAGE
@@ -37,6 +41,7 @@ reader='markdown+tex_math_single_backslash+autolink_bare_uris+gfm_auto_identifie
 pdf_engine=${PANDOC_PDF_ENGINE:-xelatex}
 add_toc=false
 number_sections=false
+title_from_first_heading=false
 toc_depth=''
 pandoc_extra=()
 positional=()
@@ -53,6 +58,10 @@ while (($#)); do
             ;;
         -N|--number-sections)
             number_sections=true
+            shift
+            ;;
+        -T|--title-from-first-heading|--first-heading-title)
+            title_from_first_heading=true
             shift
             ;;
         --toc-depth)
@@ -138,6 +147,38 @@ command -v "$pdf_engine" >/dev/null 2>&1 || {
 
 input_dir=$(cd -- "$(dirname -- "$input")" && pwd)
 
+title_filter_file=''
+cleanup() {
+    [[ -z $title_filter_file ]] || rm -f -- "$title_filter_file"
+}
+trap cleanup EXIT
+
+if $title_from_first_heading; then
+    title_filter_file=$(mktemp "${TMPDIR:-/tmp}/md2pdf-title-filter.XXXXXX")
+    cat >"$title_filter_file" <<'EOF_LUA'
+local promoted_title = nil
+
+function Header(header)
+  if promoted_title == nil and header.level == 1 then
+    promoted_title = header.content
+    return {}
+  end
+
+  if promoted_title ~= nil and header.level > 1 then
+    header.level = header.level - 1
+    return header
+  end
+end
+
+function Pandoc(document)
+  if promoted_title ~= nil then
+    document.meta.title = promoted_title
+  end
+  return document
+end
+EOF_LUA
+fi
+
 pandoc_args=(
     "$input"
     "${pandoc_extra[@]}"
@@ -151,6 +192,7 @@ pandoc_args=(
 $add_toc && pandoc_args+=(--toc)
 $number_sections && pandoc_args+=(--number-sections)
 [[ -z $toc_depth ]] || pandoc_args+=(--toc-depth="$toc_depth")
+[[ -z $title_filter_file ]] || pandoc_args+=(--lua-filter="$title_filter_file")
 
 pandoc "${pandoc_args[@]}"
 
