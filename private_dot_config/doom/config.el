@@ -69,23 +69,33 @@
 ;; change `org-directory'. It must be set before org loads!
 (setq org-directory "~/Documents/org/")
 
-;; Keep the agenda focused on active task files and a few practical support
-;; files. This should make the agenda more trustworthy and less noisy than
-;; scanning whole directories like work/ or projects/.
-(setq org-agenda-files
-      (list (concat org-directory "inbox.org")
-            (concat org-directory "todo.org")
-            (concat org-directory "notes.org")
-            (concat org-directory "journal.org")
-            (concat org-directory "home.org")
-            (concat org-directory "work/todo.org")
-            (concat org-directory "work/meeting_notes.org")
-            (concat org-directory "home/important_dates.org")
-            (concat org-directory "home/renovation.org")))
+(defvar my/org-task-directory
+  "~/Library/CloudStorage/Dropbox/beorg/"
+  "Dropbox directory containing the canonical task-management files.")
 
 (defun my/org-path (path)
   "Return PATH expanded under `org-directory'."
   (expand-file-name path org-directory))
+
+(defun my/org-task-path (path)
+  "Return PATH expanded under `my/org-task-directory'."
+  (expand-file-name path my/org-task-directory))
+
+;; Task files live in Dropbox so beorg and Emacs share one canonical copy.
+;; Notes, meetings, journals, projects, and repo plans remain in Documents/git.
+(setq org-agenda-files
+      (append
+       (mapcar #'my/org-task-path
+               '("beorg_inbox.org"
+                 "todo.org"
+                 "home.org"
+                 "work/todo.org"
+                 "home/important_dates.org"
+                 "home/renovation.org"))
+       (mapcar #'my/org-path
+               '("notes.org"
+                 "journal.org"
+                 "work/meeting_notes.org"))))
 
 (defun my/org-repo-plan-files ()
   "Return repo-plan Org files for review commands."
@@ -93,33 +103,39 @@
     (when (file-directory-p repo-plans)
       (directory-files repo-plans t "\\.org\\'"))))
 
-(defvar my/org-agenda-personal-files
-  (mapcar #'my/org-path
-          '("inbox.org"
-            "todo.org"
-            "home.org"
-            "home/important_dates.org"
-            "home/renovation.org"))
+(defvar my/org-agenda-personal-files nil
   "Files used for the personal daily agenda check.")
+(setq my/org-agenda-personal-files
+      (mapcar #'my/org-task-path
+              '("beorg_inbox.org"
+                "todo.org"
+                "home.org"
+                "home/important_dates.org"
+                "home/renovation.org")))
 
-(defvar my/org-agenda-work-files
-  (mapcar #'my/org-path
-          '("inbox.org"
-            "work/todo.org"
-            "work/meeting_notes.org"))
+(defvar my/org-agenda-work-files nil
   "Files used for the work daily agenda check.")
+(setq my/org-agenda-work-files
+      (append
+       (mapcar #'my/org-task-path
+               '("beorg_inbox.org"
+                 "work/todo.org"))
+       (list (my/org-path "work/meeting_notes.org"))))
 
-(defvar my/org-agenda-inbox-files
-  (mapcar #'my/org-path
-          '("inbox.org"
-            "notes.org"
-            "todo.org"
-            "work/todo.org"))
+(defvar my/org-agenda-inbox-files nil
   "Files used for inbox triage.")
+(setq my/org-agenda-inbox-files
+      (append
+       (mapcar #'my/org-task-path
+               '("beorg_inbox.org"
+                 "todo.org"
+                 "work/todo.org"))
+       (list (my/org-path "notes.org"))))
 
-(defvar my/org-agenda-review-files
-  (append org-agenda-files (my/org-repo-plan-files))
+(defvar my/org-agenda-review-files nil
   "Files used for weekly review.")
+(setq my/org-agenda-review-files
+      (append org-agenda-files (my/org-repo-plan-files)))
 
 (setq org-agenda-custom-commands
       `(("p" "Personal daily check"
@@ -165,10 +181,10 @@
 ;; into a huge completion list.
 (setq org-refile-targets
       `((nil . (:maxlevel . 4))
-        (,(list (concat org-directory "todo.org")
-                (concat org-directory "work/todo.org")
-                (concat org-directory "notes.org")
-                (concat org-directory "home.org"))
+        (,(list (my/org-task-path "todo.org")
+                (my/org-task-path "work/todo.org")
+                (my/org-task-path "home.org")
+                (my/org-path "notes.org"))
          . (:maxlevel . 3))
         (,(directory-files (concat org-directory "repo-plans/") t (rx ".org" eos))
          . (:maxlevel . 3))
@@ -213,28 +229,103 @@
 ;; to keep, search, and review without cluttering headings.
 (setq org-capture-templates
       `(("t" "Inbox task" entry
-         (file+headline ,(concat org-directory "inbox.org") "Inbox")
+         (file+headline ,(my/org-task-path "beorg_inbox.org") "Inbox")
          "* TODO %?\n:PROPERTIES:\n:CREATED: %U\n:END:\n")
 
         ("w" "Work task" entry
-         (file+headline ,(concat org-directory "work/todo.org") "Inbox")
+         (file+headline ,(my/org-task-path "work/todo.org") "Inbox")
          "* TODO %?\n:PROPERTIES:\n:CREATED: %U\n:END:\n")
 
         ("h" "Home/personal task" entry
-         (file+headline ,(concat org-directory "todo.org") "Inbox")
+         (file+headline ,(my/org-task-path "todo.org") "Inbox")
          "* TODO %?\n:PROPERTIES:\n:CREATED: %U\n:END:\n")
 
         ("n" "Note" entry
-         (file+headline ,(concat org-directory "notes.org") "Inbox")
+         (file+headline ,(my/org-path "notes.org") "Inbox")
          "* %?\n:PROPERTIES:\n:CREATED: %U\n:END:\n")
 
         ("m" "Work meeting note" entry
-         (file+headline ,(concat org-directory "work/meeting_notes.org") "Inbox")
+         (file+headline ,(my/org-path "work/meeting_notes.org") "Inbox")
          "* %U %?\n")
 
         ("j" "Journal entry" entry
-         (file+olp+datetree ,(concat org-directory "journal.org"))
+         (file+olp+datetree ,(my/org-path "journal.org"))
          "* %U %?\n")))
+
+(defconst my/org-task-cheat-sheet
+  "* Dropbox task workflow
+
+This window is temporary guidance. The canonical task files are in
+~/Library/CloudStorage/Dropbox/beorg/; research notes and repo plans remain in
+~/Documents/org/.
+
+** Daily habit (two minutes)
+- Open this dashboard item and scan the personal agenda.
+- Capture first; organize later.
+- Process the inbox when practical: refile, do, defer, archive, or delete.
+- Let Dropbox finish syncing before switching between Mac and phone.
+
+** Capture in Emacs
+- =SPC X= opens Org capture.
+- =t= quick/unclear task -> Dropbox =beorg_inbox.org=.
+- =h= personal task with an obvious home -> Dropbox =todo.org=.
+- =w= general non-repo work task -> Dropbox =work/todo.org=.
+- =n= note, =m= meeting note, =j= journal -> Documents (not Dropbox tasks).
+
+** Capture in beorg
+- Capture into =beorg_inbox.org=; Emacs uses the same file.
+- It is fine to mark items done on the phone.
+- Avoid editing the same file on phone and Mac at the same time.
+
+** Agenda views
+- =M-x org-agenda=, then =p=: personal daily check.
+- =M-x org-agenda=, then =w=: work daily check.
+- =M-x org-agenda=, then =i=: inbox triage.
+- =M-x org-agenda=, then =r=: weekly review.
+
+** Processing and review
+- =C-c C-w=: refile the current heading.
+- Repo-specific coding work belongs in =~/Documents/org/repo-plans/=.
+- Use real deadlines only; use =SOMEDAY= for non-current ideas.
+- Weekly: empty/trim inbox, scan personal and work TODOs, then check repo plans.
+"
+  "Short operational guide shown beside the Dropbox task dashboard.")
+
+(defun my/org-task-cheat-sheet-buffer ()
+  "Return a read-only Org buffer containing the task workflow cheat sheet."
+  (let ((buffer (get-buffer-create "*Dropbox task cheat sheet*")))
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert my/org-task-cheat-sheet)
+        (goto-char (point-min))
+        (org-mode)
+        (visual-line-mode 1)
+        (read-only-mode 1)))
+    buffer))
+
+(defun my/org-open-task-dashboard ()
+  "Open the Dropbox TODO file, personal agenda, and workflow cheat sheet."
+  (interactive)
+  (require 'org-agenda)
+  (delete-other-windows)
+  (find-file (my/org-task-path "todo.org"))
+  (let* ((todo-window (selected-window))
+         (agenda-window (split-window-right))
+         (cheat-window (split-window todo-window nil 'below)))
+    (with-selected-window agenda-window
+      (org-agenda nil "p"))
+    (set-window-buffer cheat-window (my/org-task-cheat-sheet-buffer))
+    (balance-windows)
+    (select-window agenda-window)))
+
+(add-to-list '+doom-dashboard-menu-sections
+             '("Open Dropbox tasks + agenda"
+               :icon (nerd-icons-octicon "nf-oct-checklist"
+                                          :face 'doom-dashboard-menu-title)
+               :action my/org-open-task-dashboard))
+(map! :map +doom-dashboard-mode-map
+      "t" #'my/org-open-task-dashboard)
 
 ;; org github links
 (use-package! org-gh
