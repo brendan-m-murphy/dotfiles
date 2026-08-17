@@ -266,7 +266,7 @@ This window is temporary guidance. The canonical task files are in
 - Let Dropbox finish syncing before switching between Mac and phone.
 
 ** Capture in Emacs
-- =SPC X= opens Org capture.
+- =C-c n n= opens Org capture.
 - =t= quick/unclear task -> Dropbox =beorg_inbox.org=.
 - =h= personal task with an obvious home -> Dropbox =todo.org=.
 - =w= general non-repo work task -> Dropbox =work/todo.org=.
@@ -278,10 +278,10 @@ This window is temporary guidance. The canonical task files are in
 - Avoid editing the same file on phone and Mac at the same time.
 
 ** Agenda views
-- =M-x org-agenda=, then =p=: personal daily check.
-- =M-x org-agenda=, then =w=: work daily check.
-- =M-x org-agenda=, then =i=: inbox triage.
-- =M-x org-agenda=, then =r=: weekly review.
+- =C-c n a=, then =p=: personal daily check.
+- =C-c n a=, then =w=: work daily check.
+- =C-c n a=, then =i=: inbox triage.
+- =C-c n a=, then =r=: weekly review.
 
 ** Processing and review
 - =C-c C-w=: refile the current heading.
