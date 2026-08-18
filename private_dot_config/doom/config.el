@@ -263,7 +263,73 @@
   (setq mu4e-sent-folder "/bristol-local/Sent"
         mu4e-drafts-folder "/bristol-local/Drafts"
         mu4e-trash-folder "/bristol-local/Trash"
-        mu4e-refile-folder "/bristol-local/Archive"))
+        mu4e-refile-folder "/bristol-local/Archive"
+        mu4e-compose-complete-addresses t
+        ;; While mu4e owns the database, `U' should retrieve mail and ask its
+        ;; existing mu server to index it instead of starting a competing
+        ;; external `mu index' process.
+        mu4e-get-mail-command
+        "~/Documents/Mail/bin/mbsync-oauth -c ~/.config/isyncrc bristol-inbox")
+
+  ;; `q' means different things in mu4e's main, headers, and message views.
+  ;; Provide one memorable command that always ends the complete mu4e session
+  ;; and releases the long-lived `mu server' database handle for external
+  ;; personal-ops commands.
+  (defun my/mu4e-finish-session ()
+    "Completely stop mu4e and release its mu server process."
+    (interactive)
+    (if (mu4e-running-p)
+        (progn
+          (mu4e-quit)
+          (message "Mail session finished; external mailctl/mu commands can run"))
+      (message "No mu4e session is running")))
+
+  (defun my/mu4e-send-and-finish ()
+    "Send the current message, then completely stop the mu4e session."
+    (interactive)
+    ;; A send error prevents the second form from running, leaving mu4e open so
+    ;; the draft and error remain available for recovery.
+    (message-send-and-exit)
+    (my/mu4e-finish-session))
+
+  (map! :map (mu4e-main-mode-map
+              mu4e-headers-mode-map
+              mu4e-view-mode-map)
+        :n "Q" #'my/mu4e-finish-session)
+
+  ;; mu4e supplies contact completion through completion-at-point.  Make it
+  ;; discoverable even when company has not opened a popup automatically.
+  (add-hook 'mu4e-compose-mode-hook #'company-mode)
+
+  (after! transient
+    (transient-define-prefix my/mu4e-compose-menu ()
+      "Common actions while composing a mu4e message."
+      [["Recipients"
+        ("t" "To" message-goto-to :transient nil)
+        ("c" "Cc" message-goto-cc :transient nil)
+        ("b" "Bcc" message-goto-bcc :transient nil)
+        ("a" "complete address" completion-at-point :transient nil)]
+       ["Message"
+        ("f" "attach file" mml-attach-file :transient nil)
+        ("d" "save draft" message-dont-send :transient nil)
+        ("k" "kill draft" message-kill-buffer :transient nil)
+        ("s" "send" message-send-and-exit :transient nil)
+        ("S" "send + finish mail" my/mu4e-send-and-finish :transient nil)]])
+
+    ;; This works in Evil normal and insert states as well as plain Emacs.
+    (map! :map mu4e-compose-mode-map
+          :nvi "C-c m" #'my/mu4e-compose-menu
+          :nvi "C-c M-s" #'my/mu4e-send-and-finish
+          :nvi "M-TAB" #'completion-at-point)))
+
+;; Use the existing machine-local msmtp account instead of prompting for an
+;; SMTP server.  msmtp's default account is the Bristol Office 365 account.
+(after! message
+  (setq sendmail-program (or (executable-find "msmtp")
+                             "/opt/homebrew/bin/msmtp")
+        send-mail-function #'sendmail-send-it
+        message-send-mail-function #'message-send-mail-with-sendmail
+        message-sendmail-envelope-from 'header))
 
 (defconst my/org-task-cheat-sheet
   "* Dropbox task workflow
