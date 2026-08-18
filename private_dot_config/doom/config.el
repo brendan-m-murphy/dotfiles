@@ -81,19 +81,19 @@
   "Return PATH expanded under `my/org-task-directory'."
   (expand-file-name path my/org-task-directory))
 
-;; Task files live in Dropbox so beorg and Emacs share one canonical copy.
-;; Notes, meetings, journals, projects, and repo plans remain in Documents/git.
+;; Personal/phone task capture stays in Dropbox. Work tasks, notes, meetings,
+;; projects, and repo plans remain local under Documents/org.
 (setq org-agenda-files
       (append
        (mapcar #'my/org-task-path
                '("beorg_inbox.org"
                  "todo.org"
                  "home.org"
-                 "work/todo.org"
                  "home/important_dates.org"
                  "home/renovation.org"))
        (mapcar #'my/org-path
-               '("notes.org"
+               '("work/todo.org"
+                 "notes.org"
                  "journal.org"
                  "work/meeting_notes.org"))))
 
@@ -116,11 +116,8 @@
 (defvar my/org-agenda-work-files nil
   "Files used for the work daily agenda check.")
 (setq my/org-agenda-work-files
-      (append
-       (mapcar #'my/org-task-path
-               '("beorg_inbox.org"
-                 "work/todo.org"))
-       (list (my/org-path "work/meeting_notes.org"))))
+      (list (my/org-path "work/todo.org")
+            (my/org-path "work/meeting_notes.org")))
 
 (defvar my/org-agenda-inbox-files nil
   "Files used for inbox triage.")
@@ -128,9 +125,9 @@
       (append
        (mapcar #'my/org-task-path
                '("beorg_inbox.org"
-                 "todo.org"
-                 "work/todo.org"))
-       (list (my/org-path "notes.org"))))
+                 "todo.org"))
+       (list (my/org-path "work/todo.org")
+             (my/org-path "notes.org"))))
 
 (defvar my/org-agenda-review-files nil
   "Files used for weekly review.")
@@ -182,8 +179,8 @@
 (setq org-refile-targets
       `((nil . (:maxlevel . 4))
         (,(list (my/org-task-path "todo.org")
-                (my/org-task-path "work/todo.org")
                 (my/org-task-path "home.org")
+                (my/org-path "work/todo.org")
                 (my/org-path "notes.org"))
          . (:maxlevel . 3))
         (,(directory-files (concat org-directory "repo-plans/") t (rx ".org" eos))
@@ -233,7 +230,7 @@
          "* TODO %?\n:PROPERTIES:\n:CREATED: %U\n:END:\n")
 
         ("w" "Work task" entry
-         (file+headline ,(my/org-task-path "work/todo.org") "Inbox")
+         (file+headline ,(my/org-path "work/todo.org") "Inbox")
          "* TODO %?\n:PROPERTIES:\n:CREATED: %U\n:END:\n")
 
         ("h" "Home/personal task" entry
@@ -251,6 +248,22 @@
         ("j" "Journal entry" entry
          (file+olp+datetree ,(my/org-path "journal.org"))
          "* %U %?\n")))
+
+;; Register mu4e links as soon as Org loads, even before mu4e has been opened.
+;; `mu4e-org-open' autoloads the rest of mu4e only when a link is followed.
+(after! org
+  (autoload 'mu4e-org-open "mu4e-org")
+  (org-link-set-parameters "mu4e" :follow #'mu4e-org-open))
+
+;; Only Bristol Inbox is currently mirrored from Exchange.  mu4e nevertheless
+;; requires its special folders to exist, so keep composition state and sent
+;; copies in explicitly local-only Maildirs.  Server-side moves remain the job
+;; of the reviewed mailctl workflow, not mu4e/mbsync.
+(after! mu4e
+  (setq mu4e-sent-folder "/bristol-local/Sent"
+        mu4e-drafts-folder "/bristol-local/Drafts"
+        mu4e-trash-folder "/bristol-local/Trash"
+        mu4e-refile-folder "/bristol-local/Archive"))
 
 (defconst my/org-task-cheat-sheet
   "* Dropbox task workflow
