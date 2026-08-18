@@ -1,0 +1,18 @@
+#!/bin/sh
+set -eu
+
+# The reusable implementation lives in personal-ops; chezmoi owns only this
+# machine-facing compatibility entry point.
+personal_ops_dir=${PERSONAL_OPS_DIR:-"$HOME/Documents/personal-ops"}
+
+if ! command -v uv >/dev/null 2>&1; then
+    echo "uob-timesheets: error: uv is required to run personal-ops" >&2
+    exit 127
+fi
+
+if [ ! -f "$personal_ops_dir/pyproject.toml" ]; then
+    echo "uob-timesheets: error: personal-ops not found at $personal_ops_dir" >&2
+    exit 1
+fi
+
+exec uv run --quiet --project "$personal_ops_dir" uob-timesheets "$@"
