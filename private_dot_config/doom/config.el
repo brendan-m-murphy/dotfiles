@@ -196,10 +196,11 @@
 
 ;; Keep your existing TODO vocabulary. The important workflow rule is that
 ;; PROJ headings should usually have child TODO items beneath them.
-(setq org-todo-keywords
-      '((sequence "TODO(t)" "PROJ(p)" "WAIT(w)" "HOLD(h)" "IDEA(i)" "SOMEDAY(s)"
-                  "|" "DONE(d)" "CANCELLED(c)")
-        (sequence "[ ](T)" "[-](S)" "[?](W)" "|" "[X](D)")))
+(after! org
+  (setq org-todo-keywords
+        '((sequence "TODO(t)" "PROJ(p)" "WAIT(w)" "HOLD(h)" "IDEA(i)" "SOMEDAY(s)"
+                    "|" "DONE(d)" "CANCELLED(c)")
+          (sequence "[ ](T)" "[-](S)" "[?](W)" "|" "[X](D)"))))
 
 ;; Archive completed/stale subtrees into a sibling archive file. This keeps
 ;; active files shorter without deleting history.
